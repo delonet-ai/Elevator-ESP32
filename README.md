@@ -1,102 +1,156 @@
-**English version below**
+# 🚀 Elevator ESP32 — Mini Lift on ESP32  
+**Wireless remote, OLED animations, full calibration, smooth motor motion**
 
-**Elevator ESP32 —  мини-лифт ESP32**
-С беспроводным пультом, OLED-анимацией, калибровкой и плавным движением
+> **Repository:** https://github.com/delonet-ai/Elevator-ESP32  
+> This project implements a fully functional toy elevator system built on **two ESP32 microcontrollers**:  
+> - `LiftController` — motor control, logic, calibration, sensors  
+> - `RemoteControl` — wireless remote with OLED UI and button LEDs  
 
-Этот проект — полноценный обучающий мини-лифт (для игрушек), построенный на базе двух ESP32:
-Base ESP32 — управляет мотором, калибровкой, движением, логикой и датчиками.
-Remote ESP32 — беспроводной пульт с OLED-экраном, подсветкой кнопок и ESP-NOW связью.
+The system is **autonomous**, does **not** require Wi-Fi, and uses **ESP-NOW protocol** with a full **state-machine architecture**.
 
-Проект полностью автономный, работает без Wi-Fi, использует собственный протокол и полноценную state-machine архитектуру.
+# 📁 Project Structure
 
-**✨ Возможности**
-🎛 3 этажа
-Лифт точно знает текущий этаж, умеет ездить к любому, тормозит перед остановкой.
-🛰 Беспроводной пульт (ESP-NOW)
+```
+Elevator-ESP32/
+├── LiftController/          # Main elevator logic
+│   ├── src/
+│   │   ├── motor_controller.cpp
+│   │   ├── state_machine.cpp
+│   │   ├── espnow_handler.cpp
+│   │   └── ...
+│   ├── include/
+│   ├── platformio.ini
+│   └── README_LIFT.md
+│
+├── RemoteControl/           # Wireless remote with OLED UI
+│   ├── src/
+│   │   ├── remote_ui.cpp
+│   │   ├── espnow_remote.cpp
+│   │   ├── button_leds.cpp
+│   │   └── ...
+│   ├── include/
+│   ├── platformio.ini
+│   └── README_REMOTE.md
+│
+├── docs/
+│   ├── wiring/
+│   ├── pics/
+│   ├── protocol.md
+│   └── state_machine.md
+│
+└── README.md
+```
 
-**📟 OLED-интерфейс с анимацией**
-Пульт показывает:
-текущий этаж (крупный, в центре экрана)
-направление движения (анимированная стрелка как в настоящих лифтах)
-текстовый статус слева
-ошибки / калибровку
+# ✨ Features Overview
 
-**🔦 Подсветка всех кнопок**
-Up/Down — всегда включены
-Кнопка текущего этажа — мигает
-Кнопка выбранного этажа — горит
-В калибровке — подсвечиваются только нужные кнопки
+### 🎛 Three Floors  
+Precise floor tracking, auto slowdown before stopping.
 
-**🧭 Плавное движение**
-Мотор работает с:
-плавным разгоном
-крейсерской скоростью
-торможением перед остановкой
-ограничением скорости по ходу
+### 🛰 Wireless Remote (ESP-NOW)  
+Low-latency ESP-NOW link, no Wi-Fi needed.
 
-**🎚 Регулировка скорости**
-Потенциометр задаёт максимальную скорость движения.
+### 📟 Animated OLED Interface  
+- Big floor number  
+- Animated arrow (up/down/idle)  
+- Status text  
+- Calibration prompts  
 
-**🧰 Полная система калибровки**
-На первом запуске или после сброса:
-Нажимаем UP → лифт едет вверх до концевика и записывает верхнюю позицию.
-Нажимаем DOWN → лифт едет вниз.
-Нажимаем кнопку 1 этажа → фиксируется нижняя точка.
-Лифт автоматически считает длину троса и делит её на 3 этажа.
+### 🔦 Button Backlighting  
+- UP/DOWN always on  
+- Current floor blinks  
+- Selected target lights up  
+- Calibration mode highlights only relevant buttons  
 
-**🔁 Повторная калибровка**
-На базе есть физическая кнопка на GPIO 33:
-удержание 3 секунды → полный сброс калибровки
-лифт автоматически входит в режим первичной настройки
-⚡ Быстрая калибровка вниз
-Во время калибровки скорость опускания ниже может быть увеличена (множитель).
+### 🧭 Smooth Motor Control  
+- Acceleration & deceleration  
+- Cruise speed  
+- Braking distance calculation  
+- Smooth start/stop  
 
-**🛠 Режим ручного управления**
-Кнопки UP/DOWN на пульте позволяют вручную перемещать лифт.
+### 🎚 Speed Control  
+Potentiometer sets the motor’s speed limit.
 
-**🔧 Железо (BOM)**
-**🧠 База (лифт)**
-ESP32 DevKit	контроллер лифта
-Шаговый мотор NEMA + драйвер (A4988 / DRV8825 / TMC2208)	движение кабины
-Концевик верхний	определение верхнего этажа
-Потенциометр	регулировка скорости
-Кнопка на GPIO33	принудительная калибровка
-Питание 3S Li-ion + BMS	силовая часть
-DC-DC 12→5	питание ESP32
+### 🧰 Full Calibration System  
+- Top homing to limit switch  
+- Downward travel measurement  
+- Bottom point confirmation  
+- Automatic floor division  
 
-**Пины базы**
-STEP	18
-DIR	19
-ENABLE	21
-Верхний концевик	A1
-Потенциометр	A2
-Кнопка калибровки	33
+### ⚡ Fast Down Calibration  
+Downward speed multiplier during calibration phase.
 
-**🎮 Пульт (remote ESP32)**
-ESP32 DevKit	коммуникация + UI
-OLED SSD1306 128×32	интерфейс
-5 кнопок	этажи + вверх + вниз
-5 светодиодов	индикация
-Питание 1S Li-ion	автономность
-TP4056/BMS	зарядка и защита
-  Пины пульта
-Down	13
-Up	14
-Floor 1	27
-Floor 2	26
-Floor 3	25
-  Светодиоды
-LED Down	19
-LED Up	18
-LED F1	5
-LED F2	4
-LED F3	33
-  OLED
-SDA	21
-SCL	22
+### 🛠 Manual Motion Mode  
+UP/DOWN buttons allow manual motion control.
 
-📡 Протокол ESP-NOW
-Команды пульта → база
+# 🔧 Hardware Overview (BOM)
+
+## 🧠 Base Unit (LiftController)
+
+| Component | Purpose |
+|----------|---------|
+| ESP32 DevKit | Main controller |
+| NEMA stepper motor | Move the cabin |
+| A4988 / DRV8825 / TMC2208 | Stepper driver |
+| Upper limit switch | Detect the top of travel |
+| Potentiometer | Speed limiter |
+| Button (GPIO 33) | Recalibration |
+| 3S Li-ion + BMS | Main power |
+| DC-DC 12→5 V | ESP32 power |
+
+### Base Unit Pins
+
+| Function | Pin |
+|---------|-----|
+| STEP | 18 |
+| DIR | 19 |
+| ENABLE | 21 |
+| Limit switch | A1 |
+| Potentiometer | A2 |
+| Calib button | 33 |
+
+## 🎮 Remote Unit (RemoteControl)
+
+| Component | Purpose |
+|----------|---------|
+| ESP32 DevKit | UI + communication |
+| OLED SSD1306 128×32 | Display |
+| 5 buttons | Floors + UP/DOWN |
+| 5 LEDs | Button lighting |
+| 1S Li-ion | Power |
+| TP4056 / BMS | Charging |
+
+### Remote Control Buttons
+
+| Button | Pin |
+|--------|-----|
+| Down | 13 |
+| Up | 14 |
+| Floor 1 | 27 |
+| Floor 2 | 26 |
+| Floor 3 | 25 |
+
+### Remote LEDs
+
+| LED | Pin |
+|------|----|
+| LED Down | 19 |
+| LED Up | 18 |
+| LED F1 | 5 |
+| LED F2 | 4 |
+| LED F3 | 33 |
+
+### OLED Pins
+
+| Signal | Pin |
+|--------|-----|
+| SDA | 21 |
+| SCL | 22 |
+
+# 📡 ESP-NOW Communication
+
+### Commands (Remote → Lift)
+
+```
 CMD_CALL_FLOOR
 CMD_STOP
 CMD_CALIB
@@ -105,9 +159,13 @@ CMD_CALIB_DOWN_SAVE
 CMD_MANUAL_UP
 CMD_MANUAL_DOWN
 CMD_MANUAL_STOP
+```
 
-Статус база → пульт
-state (текущее состояние автомата)
+### Status Message (Lift → Remote)  
+Sent **every 200 ms**
+
+```
+state
 currentFloor
 targetFloor
 direction
@@ -115,11 +173,13 @@ speedPercent
 error
 needCalib
 uptime
+```
 
-Статус отправляется каждые 200 мс.
+# 🔁 LiftController State Machine
 
-**🔁 State Machine (база)**
-Основные состояния:
+Main states:
+
+```
 STATE_BOOT
 STATE_NEED_CALIB
 STATE_CALIB_HOMING_UP
@@ -128,52 +188,69 @@ STATE_IDLE
 STATE_MOVING
 STATE_MANUAL_MOVE
 STATE_ERROR
-Тик автомата каждые 20 мс.
+```
 
-**🧮 Калибровка**
-Первый запуск
-Лифт стоит в STATE_NEED_CALIB
-Нажимаем UP → выезд вверх (STATE_CALIB_HOMING_UP)
-Концевик → фиксируем верх
-Нажимаем DOWN → спуск вниз (STATE_CALIB_MOVING_DOWN)
-Нажимаем Floor 1 → фиксируем низ
-Лифт готов (STATE_IDLE)
+State tick interval: **20 ms**
 
-Повторная калибровка
-GPIO33 (удержание ≥3s) → полный сброс EEPROM.
-🖥 OLED-интерфейс пульта
+# 🧮 Calibration Logic
 
-**Экран разделён на три зоны:**
+### Initial Calibration
 
+1. System starts in `STATE_NEED_CALIB`
+2. Press **UP** → move to upper limit  
+3. Limit triggered → save top position  
+4. Press **DOWN** → move downward  
+5. Press **Floor 1** → save bottom point  
+6. Elevator ready → `STATE_IDLE`
+
+### Recalibration  
+- Hold **GPIO33** ≥ 3 seconds → reset EEPROM and restart calibration
+
+# 🖥 OLED UI Structure
+
+```
 +----------------+------------------+-----------------+
-|   Статус       |  Крупный этаж    |  Анимация       |
-|   (текст)      |      (size=3)    |  стрелки ↑↓↔    |
+|  Status text   |   Big floor #    |  Arrow anim     |
+|                |     (size=3)     |     ↑ ↓ ↔       |
 +----------------+------------------+-----------------+
+```
 
-Анимация стрелки
-Вверх → внутри стрелки “бегут сегменты” вверх
-Вниз → сегменты бегут вниз
-Стоим → толстая горизонтальная линия
-Обновление по millis() каждые ~150 мс.
+Arrow animation:  
+- Scrolling segments upward → UP  
+- Scrolling segments downward → DOWN  
+- Thick horizontal bar → idle  
+- Refresh every ~150 ms
 
-**⚙ Моторный контроллер**
-Плавное ускорение и торможение
-Рассчёт тормозного пути (v² / (2a))
-Режим MoveTo с автоторможением
+# ⚙ Motor Controller
 
-Режим Manual
-Отдельная логика для быстрой калибровки вниз:
+- Soft acceleration  
+- Soft braking  
+- Braking distance calculation (`v² / 2a`)  
+- Auto-stop at destination  
+- Separate manual mode logic  
+
+### Fast downward calibration example:
+
+```cpp
 if (calibDownFastFlag && manualDir < 0) {
-    baseSpeed *= X;   // множитель скорости
+    baseSpeed *= X;   // Faster descending speed
 }
+```
 
-**🧪 Статус проекта**
+# 📐 Wiring Diagram (ASCII Placeholder)
 
-✔ Mотор двигает кабину плавно
-✔ Пульт полностью работает
-✔ ESP-NOW стабильный
-✔ Калибровка надёжная
-✔ OLED-UI красивый и понятный ребёнку
-✔ Подсветка кнопок реализована
-✔ Быстрая калибровка вниз работает
+```
+<INSERT YOUR ASCII DIAGRAM HERE>
+```
 
+# 🧪 Project Status
+
+| Feature | Status |
+|---------|--------|
+| Smooth motor movement | ✔ |
+| Wireless remote | ✔ |
+| ESP-NOW stable link | ✔ |
+| Reliable calibration | ✔ |
+| OLED UI | ✔ |
+| Button lighting | ✔ |
+| Fast calibration down | ✔ |
