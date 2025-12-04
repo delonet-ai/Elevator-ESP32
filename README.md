@@ -14,30 +14,13 @@ The system is **autonomous**, does **not** require Wi-Fi, and uses **ESP-NOW pro
 ```
 Elevator-ESP32/
 ├── LiftController/          # Main elevator logic
-│   ├── src/
-│   │   ├── motor_controller.cpp
-│   │   ├── state_machine.cpp
-│   │   ├── espnow_handler.cpp
+│   ├── motor_controller.cpp
+│   ├── state_machine.cpp
+│   ├── espnow_handler.cpp
 │   │   └── ...
-│   ├── include/
-│   ├── platformio.ini
-│   └── README_LIFT.md
-│
+│  │
 ├── RemoteControl/           # Wireless remote with OLED UI
-│   ├── src/
-│   │   ├── remote_ui.cpp
-│   │   ├── espnow_remote.cpp
-│   │   ├── button_leds.cpp
-│   │   └── ...
-│   ├── include/
-│   ├── platformio.ini
-│   └── README_REMOTE.md
-│
-├── docs/
-│   ├── wiring/
-│   ├── pics/
-│   ├── protocol.md
-│   └── state_machine.md
+│   │   ├── remote.ino
 │
 └── README.md
 ```
