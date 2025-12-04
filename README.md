@@ -315,7 +315,7 @@ if (calibDownFastFlag && manualDir < 0) {
             └──────────────► общий GND
 
 
-Пульт
+Пульт 
 
                       ┌──────────────────────────────┐
                       │         ESP32 REMOTE         │
