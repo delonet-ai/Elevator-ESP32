@@ -224,26 +224,7 @@ if (calibDownFastFlag && manualDir < 0) {
 # 📐 Wiring Diagram (ASCII Placeholder)
 
 ```
-<INSERT YOUR ASCII DIAGRAM HERE>
-```
-
-# 🧪 Project Status
-
-| Feature | Status |
-|---------|--------|
-| Smooth motor movement | ✔ |
-| Wireless remote | ✔ |
-| ESP-NOW stable link | ✔ |
-| Reliable calibration | ✔ |
-| OLED UI | ✔ |
-| Button lighting | ✔ |
-| Fast calibration down | ✔ |
-
-
-Схема подключения базы
-
-
-                      ┌──────────────────────────────┐
+      ┌──────────────────────────────┐
                       │          ESP32 BASE          │
                       │                              │
                       │   3V3 ──────────────┐        │
@@ -362,7 +343,22 @@ if (calibDownFastFlag && manualDir < 0) {
  │ TP4056        │ → 3.3V стабилизатор → ESP32 3.3V
  └──────────────┘
  (либо LDO AMS1117-3.3)
+```
 
+# 🧪 Project Status
+
+| Feature | Status |
+|---------|--------|
+| Smooth motor movement | ✔ |
+| Wireless remote | ✔ |
+| ESP-NOW stable link | ✔ |
+| Reliable calibration | ✔ |
+| OLED UI | ✔ |
+| Button lighting | ✔ |
+| Fast calibration down | ✔ |
+
+
+                
 
 
 **Elevator ESP32 —  мини-лифт ESP32**
