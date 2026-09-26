@@ -27,7 +27,11 @@ static const long SOFT_LIMIT_MARGIN_STEPS = 100;
 static const long CALIB_MAX_TRAVEL_STEPS = 100000;
 
 // --- Таймауты (мс) ---
-static const uint32_t MOTION_TIMEOUT_MS       = 20000;  // поездка между этажами
+// Таймаут поездки считается от расстояния: на минимуме регулятора скорости
+// (SPEED_MIN) полный проезд шахты занимает секунды, и фиксированный порог
+// срабатывал бы как ложная ошибка.
+static const uint32_t MOTION_TIMEOUT_MIN_MS   = 5000;   // нижняя граница
+static const float    MOTION_TIMEOUT_FACTOR   = 1.5f;   // запас к расчётному времени
 static const uint32_t HOMING_TIMEOUT_MS       = 30000;  // подъём до концевика
 static const uint32_t CALIB_DOWN_TIMEOUT_MS   = 60000;  // спуск в калибровке
 // Ручное движение — команда удержания: пульт повторяет её, пока кнопка нажата.

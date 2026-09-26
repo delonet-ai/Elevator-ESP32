@@ -22,12 +22,16 @@ bool g_positionKnown = false;
 // если повторы пропали, база останавливается сама.
 unsigned long g_holdDeadline   = 0;
 unsigned long g_motionStartMs  = 0;
+unsigned long g_motionTimeoutMs = MOTION_TIMEOUT_MIN_MS;
 
 // Направление, которое мы САМИ скомандовали в ручном режиме.
 // Опрашивать motorGetDirection() здесь нельзя: сразу после команды мотор
 // ещё не поехал и вернёт 0, из-за чего движение перезапускалось бы
 // на каждом повторе удержания, обнуляя MANUAL_MAX_DURATION_MS.
 int g_manualDir = 0;
+// То же для спуска в калибровке: motorIsRunning() сразу после команды
+// ещё false, и повтор удержания перезапускал бы движение.
+bool g_calibDescending = false;
 
 // Пауза после старта движения, в течение которой «мотор стоит» не считается
 // отказом: периферии нужно время, чтобы подхватить команду.
@@ -35,24 +39,27 @@ const unsigned long MOTION_SETTLE_MS = 250;
 
 void enterError(LiftError code, const char *why) {
   motorStopHard();
-  g_state       = STATE_ERROR;
-  g_error       = code;
-  g_manualDir   = 0;
+  g_state           = STATE_ERROR;
+  g_error           = code;
+  g_manualDir       = 0;
+  g_calibDescending = false;
   g_targetFloor = 0;
   g_holdDeadline = 0;
   LOG_E("[SM] ERROR %u: %s", (unsigned)code, why);
 }
 
 void enterIdle() {
-  g_state        = STATE_IDLE;
-  g_manualDir    = 0;
+  g_state           = STATE_IDLE;
+  g_manualDir       = 0;
+  g_calibDescending = false;
   g_targetFloor  = 0;
   g_holdDeadline = 0;
 }
 
 // Куда перейти, когда движение закончено, а ошибок нет.
 void enterReadyState() {
-  g_manualDir = 0;
+  g_manualDir       = 0;
+  g_calibDescending = false;
   if (!calibIsValid()) {
     g_state = STATE_NEED_CALIB;
   } else if (!g_positionKnown) {
@@ -74,15 +81,14 @@ bool isCalibState(LiftState s) {
 void handleTopSwitch() {
   switch (g_state) {
     case STATE_CALIB_HOMING_UP:
-      motorStopHard();
-      calibMarkTop();
+      calibMarkTop();  // сама останавливает привод и ждёт останова
       g_state        = STATE_CALIB_MOVING_DOWN;
       g_holdDeadline = 0;
       LOG_I("[SM] Calibration: top reached, waiting for DOWN");
       break;
 
     case STATE_HOMING:
-      motorStopHard();
+      motorStopHardAndWait();
       // Концевик — единственная физически достоверная точка шахты.
       motorSetPosition(floorGetTopSwitchPosition());
       g_positionKnown = true;
@@ -186,6 +192,7 @@ void smFastPoll() {
       LOG_W("[SM] Manual hold expired, stopping");
     } else if (g_state == STATE_CALIB_MOVING_DOWN) {
       motorStopSmooth();
+      g_calibDescending = false;
       LOG_W("[SM] Calibration hold expired, stopping descent");
     }
   }
@@ -240,7 +247,7 @@ void smTick() {
         break;
       }
 
-      if (now - g_motionStartMs > MOTION_TIMEOUT_MS) {
+      if (now - g_motionStartMs > g_motionTimeoutMs) {
         enterError(ERR_MOTION_TIMEOUT, "motion timeout");
       }
       break;
@@ -302,6 +309,12 @@ void smCommandMoveToFloor(uint8_t floor) {
   g_state         = STATE_MOVING;
   g_motionStartMs = millis();
   g_holdDeadline  = 0;
+
+  // Худший случай — регулятор скорости выкручен в минимум.
+  unsigned long expected =
+      (unsigned long)((labs(dest - pos) * 1000.0f / SPEED_MIN) * MOTION_TIMEOUT_FACTOR);
+  g_motionTimeoutMs = expected + MOTION_TIMEOUT_MIN_MS;
+
   motorMoveTo(dest);
   LOG_I("[SM] Moving to floor %u (pos %ld -> %ld)", floor, pos, dest);
 }
@@ -335,8 +348,9 @@ void smCommandStartCalib() {
   g_error         = ERR_NONE;
   g_positionKnown = false;
   g_targetFloor   = 0;
-  g_state         = STATE_CALIB_HOMING_UP;
-  g_motionStartMs = millis();
+  g_state           = STATE_CALIB_HOMING_UP;
+  g_calibDescending = false;
+  g_motionStartMs   = millis();
   motorRunUp(SPEED_HOMING);
   LOG_I("[SM] Calibration started: homing up");
 }
@@ -346,8 +360,9 @@ void smCommandCalibDownHold() {
     LOG_W("[SM] Calib DOWN ignored in state %u", (unsigned)g_state);
     return;
   }
-  if (!motorIsRunning()) {
-    g_motionStartMs = millis();
+  if (!g_calibDescending) {
+    g_calibDescending = true;
+    g_motionStartMs   = millis();
     motorRunDown(SPEED_MANUAL * CALIB_DOWN_MULTIPLIER);
   }
   holdRefresh();
@@ -359,8 +374,11 @@ void smCommandCalibDownSave() {
     return;
   }
 
-  motorStopSmooth();
-  g_holdDeadline = 0;
+  // Низ фиксируем по факту останова, а не по команде торможения:
+  // за время замедления кабина проехала бы ещё сотни шагов.
+  motorStopHardAndWait();
+  g_holdDeadline    = 0;
+  g_calibDescending = false;
 
   if (!calibFinishAtBottom(motorGetPosition())) {
     enterError(ERR_TRAVEL_TOO_SHORT, "measured travel too short");
@@ -430,8 +448,9 @@ void smCommandManualStop() {
     motorStopSmooth();
     enterReadyState();
     LOG_I("[SM] Manual stop");
-  } else if (g_state == STATE_CALIB_MOVING_DOWN && motorIsRunning()) {
+  } else if (g_state == STATE_CALIB_MOVING_DOWN && g_calibDescending) {
     motorStopSmooth();
+    g_calibDescending = false;
     LOG_I("[SM] Calibration descent stopped");
   }
 }
@@ -501,3 +520,16 @@ void smPrintStatus(Stream &out) {
              motorGetDirection(), (unsigned)g_error,
              floorGetFullTravelSteps());
 }
+
+#ifdef BENCH_COMMANDS
+void smBenchSetCalibrated(long travelSteps) {
+  motorStopHardAndWait();
+  floorSetFullTravelSteps(travelSteps);
+  motorSetPosition(0);
+  g_positionKnown = true;
+  g_error         = ERR_NONE;
+  g_manualDir     = 0;
+  enterIdle();
+  LOG_W("[SM] BENCH: calibration injected, travel=%ld", travelSteps);
+}
+#endif

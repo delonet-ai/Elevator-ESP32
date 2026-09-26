@@ -36,3 +36,9 @@ uint8_t   smGetError();
 long      smGetPosition();
 bool      smPositionKnown();
 void      smPrintStatus(Stream &out);
+
+#ifdef BENCH_COMMANDS
+// Стендовый режим: подставить калибровку и считать позицию известной,
+// чтобы проверить поездки и защиты без реального прогона шахты.
+void smBenchSetCalibrated(long travelSteps);
+#endif

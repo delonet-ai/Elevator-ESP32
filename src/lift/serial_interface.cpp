@@ -1,5 +1,6 @@
 #include "serial_interface.h"
 #include "state_machine.h"
+#include "io_manager.h"
 #include "floor_manager.h"
 #include "motor_controller.h"
 #include "log.h"
@@ -26,6 +27,18 @@ void printHelp() {
 }
 
 void handleCommand(const char *cmd) {
+#ifdef BENCH_COMMANDS
+  // Стендовые команды: только для проверки логики без собранного лифта.
+  long arg = 0;
+  if (sscanf(cmd, "BCAL %ld", &arg) == 1) {
+    smBenchSetCalibrated(arg);
+    return;
+  }
+  if (!strcmp(cmd, "BTOP1")) { ioBenchOverrideTopSwitch(true);  Serial.println(F("bench: top=ON"));  return; }
+  if (!strcmp(cmd, "BTOP0")) { ioBenchOverrideTopSwitch(false); Serial.println(F("bench: top=OFF")); return; }
+  if (!strcmp(cmd, "BTOPX")) { ioBenchClearOverride();          Serial.println(F("bench: top=real")); return; }
+#endif
+
   if      (!strcmp(cmd, "F1"))     smCommandMoveToFloor(1);
   else if (!strcmp(cmd, "F2"))     smCommandMoveToFloor(2);
   else if (!strcmp(cmd, "F3"))     smCommandMoveToFloor(3);

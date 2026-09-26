@@ -24,6 +24,11 @@ struct Debounced {
 };
 
 Debounced g_topSwitch;
+
+#ifdef BENCH_COMMANDS
+bool g_benchTopOverride = false;
+bool g_benchTopValue    = false;
+#endif
 Debounced g_calibButton;
 
 bool          g_calibPressPrev     = false;
@@ -90,8 +95,22 @@ void ioUpdate() {
 }
 
 bool ioTopSwitchActive() {
+#ifdef BENCH_COMMANDS
+  if (g_benchTopOverride) return g_benchTopValue;
+#endif
   return g_topSwitch.state;
 }
+
+#ifdef BENCH_COMMANDS
+void ioBenchOverrideTopSwitch(bool active) {
+  g_benchTopOverride = true;
+  g_benchTopValue    = active;
+}
+
+void ioBenchClearOverride() {
+  g_benchTopOverride = false;
+}
+#endif
 
 bool ioCalibButtonPressed() {
   return g_calibButton.state;

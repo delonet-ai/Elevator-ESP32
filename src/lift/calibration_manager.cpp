@@ -14,6 +14,9 @@ bool calibIsValid() {
 }
 
 void calibMarkTop() {
+  // Ждём фактического останова: иначе нулевую отметку затрут шаги,
+  // ещё стоящие в очереди.
+  motorStopHardAndWait();
   // Калибровочная шкала: 0 на концевике, вниз — отрицательные значения.
   motorSetPosition(0);
   LOG_I("[CALIB] Top switch reached, calibration zero set");

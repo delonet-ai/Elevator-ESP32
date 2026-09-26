@@ -23,3 +23,10 @@ int ioReadPotRaw();
 
 // Предел скорости по потенциометру, 0..100 %.
 uint8_t ioSpeedPercent();
+
+#ifdef BENCH_COMMANDS
+// Стендовый режим: подменить состояние концевика, чтобы прогнать логику
+// без собранной шахты. В боевую сборку не попадает.
+void ioBenchOverrideTopSwitch(bool active);
+void ioBenchClearOverride();
+#endif

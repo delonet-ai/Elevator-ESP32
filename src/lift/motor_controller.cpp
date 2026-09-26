@@ -24,6 +24,17 @@ uint32_t clampSpeed(float stepsPerSec) {
   return (uint32_t)stepsPerSec;
 }
 
+// Почему не forceStop(): он выставляет в очереди флаг ignore_commands и
+// не снимает его, из-за чего следующий runForward()/runBackward() молча
+// не запускается — команда принимается, а привод стоит.
+// forceStopAndNewPosition() останавливает так же резко, но корректно
+// сбрасывает очередь.
+void forceStopKeepingPosition() {
+  g_stepper->forceStopAndNewPosition(g_stepper->getCurrentPosition());
+  g_direction = 0;
+  g_autoMove  = false;
+}
+
 }  // namespace
 
 bool motorInit() {
@@ -84,7 +95,15 @@ void motorMoveTo(long position) {
   g_direction = (position > current) ? 1 : ((position < current) ? -1 : 0);
 
   g_autoMove = true;
-  g_stepper->moveTo((int32_t)position);
+  int8_t res = g_stepper->moveTo((int32_t)position);
+  if (res != MOVE_OK) {
+    // Код возврата раньше игнорировался, и отказ привода выглядел как
+    // «команда принята, но кабина не едет».
+    LOG_E("[MOTOR] moveTo rejected, code %d", (int)res);
+    g_direction = 0;
+    g_autoMove  = false;
+    return;
+  }
   LOG_I("[MOTOR] MoveTo %ld from %ld at %u Hz", position, current, (unsigned)g_activeSpeedHz);
 }
 
@@ -94,7 +113,12 @@ void motorRunUp(float stepsPerSec) {
   g_stepper->setSpeedInHz(g_activeSpeedHz);
   g_direction = 1;
   g_autoMove  = false;
-  g_stepper->runForward();
+  int8_t res = g_stepper->runForward();
+  if (res != MOVE_OK) {
+    LOG_E("[MOTOR] runForward rejected, code %d", (int)res);
+    g_direction = 0;
+    return;
+  }
   LOG_I("[MOTOR] Run UP at %u Hz", (unsigned)g_activeSpeedHz);
 }
 
@@ -104,7 +128,12 @@ void motorRunDown(float stepsPerSec) {
   g_stepper->setSpeedInHz(g_activeSpeedHz);
   g_direction = -1;
   g_autoMove  = false;
-  g_stepper->runBackward();
+  int8_t res = g_stepper->runBackward();
+  if (res != MOVE_OK) {
+    LOG_E("[MOTOR] runBackward rejected, code %d", (int)res);
+    g_direction = 0;
+    return;
+  }
   LOG_I("[MOTOR] Run DOWN at %u Hz", (unsigned)g_activeSpeedHz);
 }
 
@@ -118,10 +147,22 @@ void motorStopSmooth() {
 
 void motorStopHard() {
   if (g_stepper == nullptr) return;
-  g_stepper->forceStop();
-  g_direction = 0;
-  g_autoMove  = false;
-  LOG_W("[MOTOR] Emergency stop");
+  forceStopKeepingPosition();
+  LOG_W("[MOTOR] Emergency stop at %ld", (long)g_stepper->getCurrentPosition());
+}
+
+void motorStopHardAndWait() {
+  if (g_stepper == nullptr) return;
+
+  forceStopKeepingPosition();
+
+  // Хвост очереди — доли миллисекунды; потолок нужен только на случай,
+  // если периферия по какой-то причине не отдаёт признак останова.
+  const unsigned long deadline = millis() + 50;
+  while (g_stepper->isRunning() && (long)(millis() - deadline) < 0) {
+    delayMicroseconds(200);
+  }
+  LOG_W("[MOTOR] Emergency stop at %ld", (long)g_stepper->getCurrentPosition());
 }
 
 long motorGetPosition() {
@@ -131,6 +172,12 @@ long motorGetPosition() {
 
 void motorSetPosition(long position) {
   if (g_stepper == nullptr) return;
+  // setCurrentPosition() на движущемся приводе оставляет генератор рампы
+  // в несогласованном состоянии: следующая команда движения молча
+  // отклоняется. Поэтому сначала гарантируем полный останов.
+  if (g_stepper->isRunning()) {
+    motorStopHardAndWait();
+  }
   g_stepper->setCurrentPosition((int32_t)position);
   LOG_I("[MOTOR] Position set to %ld", position);
 }
