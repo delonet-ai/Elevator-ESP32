@@ -1,5 +1,6 @@
 #include "state_machine.h"
 #include "web_config.h"
+#include "web_calibration.h"
 #include "motor_controller.h"
 #include "io_manager.h"
 #include "floor_manager.h"
@@ -322,10 +323,13 @@ void smCommandMoveToFloor(uint8_t floor) {
 }
 
 void smCommandStop() {
+  const bool browserOwned = webCalibrationBlocksCommands();
+  webCalibrationExternalStop();
   // Экстренный стоп обязан работать в любом состоянии, включая калибровку.
   motorStopHard();
   g_holdDeadline = 0;
   g_targetFloor  = 0;
+  g_calibDescending = false;
 
   if (g_state == STATE_MOVING || g_state == STATE_MANUAL_MOVE ||
       g_state == STATE_HOMING) {
@@ -335,9 +339,16 @@ void smCommandStop() {
     enterReadyState();
   } else if (g_state == STATE_CALIB_HOMING_UP) {
     g_state = STATE_NEED_CALIB;
+  } else if (browserOwned && g_state == STATE_CALIB_MOVING_DOWN) {
+    g_state = STATE_NEED_CALIB;
   }
-  // В CALIB_MOVING_DOWN остаёмся: спуск прерван, точку низа ещё можно задать.
+  // Для пульта спуск можно продолжить; веб-сессия после STOP отзывается.
   LOG_I("[SM] STOP");
+}
+
+void smCommandAbortCalib() {
+  smCommandStop();
+  if (g_state == STATE_CALIB_MOVING_DOWN) g_state = STATE_NEED_CALIB;
 }
 
 void smCommandStartCalib() {
@@ -354,6 +365,10 @@ void smCommandStartCalib() {
   g_state           = STATE_CALIB_HOMING_UP;
   g_calibDescending = false;
   g_motionStartMs   = millis();
+  if (ioTopSwitchActive()) {
+    handleTopSwitch();
+    return;
+  }
   motorRunUp(SPEED_HOMING);
   LOG_I("[SM] Calibration started: homing up");
 }
@@ -373,6 +388,7 @@ void smCommandCalibDownHold() {
 }
 
 void smCommandCalibDownSave() {
+  if (webMotionLocked()) return;
   if (g_state != STATE_CALIB_MOVING_DOWN) {
     LOG_W("[SM] Calib SAVE ignored in state %u", (unsigned)g_state);
     return;
@@ -384,8 +400,12 @@ void smCommandCalibDownSave() {
   g_holdDeadline    = 0;
   g_calibDescending = false;
 
-  if (!calibFinishAtBottom(motorGetPosition())) {
+  if (motorGetPosition() > -(TOP_MARGIN_STEPS + MIN_TRAVEL_STEPS)) {
     enterError(ERR_TRAVEL_TOO_SHORT, "measured travel too short");
+    return;
+  }
+  if (!calibFinishAtBottom(motorGetPosition())) {
+    enterError(ERR_STORAGE, "calibration could not be saved");
     return;
   }
 
@@ -448,6 +468,8 @@ void smCommandManualDownHold() {
 }
 
 void smCommandManualStop() {
+  // A stop from the remote/USB also revokes the browser's lease.
+  if (webCalibrationBlocksCommands()) { smCommandStop(); return; }
   g_holdDeadline = 0;
 
   if (g_state == STATE_MANUAL_MOVE) {
@@ -482,6 +504,7 @@ void smCommandStartHoming() {
 }
 
 void smCommandClearError() {
+  if (webMotionLocked()) return;
   if (g_state != STATE_ERROR) return;
   g_error = ERR_NONE;
   // После любой ошибки позиция считается недостоверной.
@@ -491,8 +514,13 @@ void smCommandClearError() {
 }
 
 void smForceNeedCalib() {
+  if (webCalibrationBlocksCommands()) { smCommandStop(); return; }
   motorStopHard();
-  calibReset();
+  g_positionKnown = false;
+  if (!calibReset()) {
+    enterError(ERR_STORAGE, "calibration could not be cleared");
+    return;
+  }
   g_error         = ERR_NONE;
   g_targetFloor   = 0;
   g_positionKnown = false;
@@ -531,7 +559,10 @@ void smPrintStatus(Stream &out) {
 #ifdef BENCH_COMMANDS
 void smBenchSetCalibrated(long travelSteps) {
   motorStopHardAndWait();
-  floorSetFullTravelSteps(travelSteps);
+  if (!floorSetFullTravelSteps(travelSteps)) {
+    enterError(ERR_STORAGE, "bench calibration could not be saved");
+    return;
+  }
   motorSetPosition(0);
   g_positionKnown = true;
   g_error         = ERR_NONE;

@@ -26,14 +26,15 @@ void recomputeFloorPositions() {
   }
 }
 
-void persistTravel(long steps) {
+bool persistTravel(long steps) {
   if (!g_prefs.begin(NVS_NAMESPACE, false)) {
     LOG_E("[FLOOR] NVS open failed, calibration not saved");
-    return;
+    return false;
   }
-  g_prefs.putUInt(KEY_VERSION, CALIB_STORAGE_VERSION);
-  g_prefs.putLong(KEY_TRAVEL, steps);
+  bool saved = g_prefs.putUInt(KEY_VERSION, CALIB_STORAGE_VERSION) == sizeof(uint32_t) &&
+               g_prefs.putLong(KEY_TRAVEL, steps) == sizeof(int32_t);
   g_prefs.end();
+  return saved;
 }
 
 }  // namespace
@@ -95,30 +96,31 @@ uint8_t floorGetNearestFloor(long position) {
   return best;
 }
 
-void floorSetFullTravelSteps(long steps) {
+bool floorSetFullTravelSteps(long steps) {
   if (steps < MIN_TRAVEL_STEPS) {
-    floorClearCalibration();
-    return;
+    return floorClearCalibration();
   }
 
+  if (!persistTravel(steps)) return false;
   g_fullTravelSteps = steps;
   g_hasCalib        = true;
   recomputeFloorPositions();
-  persistTravel(steps);
 
   LOG_I("[FLOOR] Calibrated: travel=%ld f1=%ld f2=%ld f3=%ld topSwitch=%ld",
         g_fullTravelSteps, g_floorPos[1], g_floorPos[2], g_floorPos[3],
         floorGetTopSwitchPosition());
+  return true;
 }
 
-void floorClearCalibration() {
+bool floorClearCalibration() {
+  if (!persistTravel(0)) return false;
   g_fullTravelSteps = 0;
   g_hasCalib        = false;
   for (uint8_t f = 0; f <= FLOOR_COUNT; f++) {
     g_floorPos[f] = 0;
   }
-  persistTravel(0);
   LOG_I("[FLOOR] Calibration cleared");
+  return true;
 }
 
 long floorGetFullTravelSteps() {

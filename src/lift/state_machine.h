@@ -17,6 +17,8 @@ void smFastPoll();
 // --- Команды ---
 void smCommandMoveToFloor(uint8_t floor);
 void smCommandStop();          // работает в любом состоянии
+// Stop calibration and abandon its temporary coordinate system without erasing NVS.
+void smCommandAbortCalib();
 void smCommandStartCalib();
 void smCommandCalibDownHold(); // калибровка: удержание «вниз»
 void smCommandCalibDownSave();

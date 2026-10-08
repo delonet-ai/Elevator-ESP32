@@ -23,6 +23,7 @@ void calibMarkTop() {
 }
 
 bool calibFinishAtBottom(long bottomPos) {
+  if (bottomPos >= 0) return false;
   long measured = labs(bottomPos);
   long travel   = measured - TOP_MARGIN_STEPS;
 
@@ -37,7 +38,10 @@ bool calibFinishAtBottom(long bottomPos) {
     return false;
   }
 
-  floorSetFullTravelSteps(travel);
+  if (!floorSetFullTravelSteps(travel)) {
+    LOG_E("[CALIB] NVS save failed");
+    return false;
+  }
 
   // Переходим в рабочую шкалу: низ = 0, ось вверх.
   motorSetPosition(0);
@@ -48,7 +52,8 @@ bool calibFinishAtBottom(long bottomPos) {
   return true;
 }
 
-void calibReset() {
-  floorClearCalibration();
+bool calibReset() {
+  if (!floorClearCalibration()) return false;
   LOG_I("[CALIB] Calibration reset");
+  return true;
 }

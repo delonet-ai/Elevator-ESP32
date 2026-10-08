@@ -15,6 +15,14 @@ jobs:
           node-version: "22"
       - name: Test embedded web interface
         run: node --test tests/*.test.cjs
+      - name: Test calibration ownership and timeouts
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror tests/web_control_policy_test.cpp -o /tmp/web-policy-test
+          /tmp/web-policy-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/web_calibration_runtime_test.cpp -o /tmp/web-runtime-test
+          /tmp/web-runtime-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/calibration_storage_test.cpp -o /tmp/calibration-storage-test
+          /tmp/calibration-storage-test
 
   firmware:
     runs-on: ubuntu-latest

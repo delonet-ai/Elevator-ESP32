@@ -16,9 +16,9 @@ bool calibIsValid();
 void calibMarkTop();
 
 // Кабина внизу. bottomPos — позиция в калибровочной шкале (отрицательная).
-// Возвращает false, если измеренный ход меньше допустимого: калибровка
+// Возвращает false при неверном ходе или ошибке NVS: калибровка
 // в этом случае не сохраняется.
 bool calibFinishAtBottom(long bottomPos);
 
 // Стереть калибровку, в том числе из NVS.
-void calibReset();
+bool calibReset();

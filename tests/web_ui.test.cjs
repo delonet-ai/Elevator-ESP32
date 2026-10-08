@@ -9,12 +9,16 @@ const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 async function load(fetch) {
   const nodes = {};
-  function node() { return {textContent:'', children:[], replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
-  const context = vm.createContext({fetch, AbortSignal, confirm:()=>true, setTimeout:()=>{},
-    document:{getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
+  const events = {};
+  function node() { return {textContent:'', children:[], setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
+  const context = vm.createContext({fetch, AbortSignal, URLSearchParams, Uint32Array,
+    crypto:{getRandomValues:a=>{a[0]=42;return a;}}, confirm:()=>true, setTimeout:()=>{}, clearTimeout:()=>{},
+    window:{addEventListener:(name,fn)=>events[name]=fn},
+    document:{addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
   vm.runInContext(script, context);
   await new Promise(resolve=>setImmediate(resolve));
   nodes.refresh = () => vm.runInContext('update()', context);
+  nodes.event = name => events[name]();
   return nodes;
 }
 
@@ -32,6 +36,52 @@ test('renders real status and sends authenticated network-change token', async()
   assert.equal(requests[1].options.headers['X-Lift-Token'],'test-token');
   assert.equal(nodes.message.textContent,'Connect to Lift-Setup');
   assert.equal(nodes.network.disabled,true);
+});
+
+test('web calibration sends holds, pauses on release and stops on leaving the tab',async()=>{
+  const requests=[];
+  let status={state:1,age:0,stationary:true,calibOwner:0,calibGeneration:8,calibCanStart:true,token:'secret'};
+  const nodes=await load(async(url,options)=>{
+    requests.push({url,options});
+    return {ok:true,json:async()=>status,text:async()=> 'Queued'};
+  });
+  await nodes.start.onclick();
+  const commands=()=>requests.filter(x=>x.url==='/api/calibration').map(x=>Object.fromEntries(x.options.body));
+  assert.equal(commands()[0].action,'start');
+  assert.equal(commands()[0].owner,'42');
+  assert.equal(commands()[0].generation,'8');
+  status={...status,state:3,stationary:false,calibOwner:42,calibCanStart:false,calibCanSave:true};
+  await nodes.refresh();
+  assert.equal(nodes.down.disabled,false);
+  nodes.down.onpointerdown({pointerId:1,preventDefault(){}});
+  assert.equal(commands().at(-1).action,'down');
+  assert.equal(nodes.save.disabled,true);
+  nodes.down.onpointerup();
+  assert.equal(commands().at(-1).action,'pause');
+  const actions=commands();
+  assert.ok(Number(actions.at(-1).sequence)>Number(actions.at(-2).sequence));
+  nodes.event('blur');
+  assert.equal(requests.at(-1).url,'/api/stop');
+  assert.equal(nodes.down.disabled,true);
+});
+
+test('expired generation never restarts an active browser session automatically',async()=>{
+  const requests=[];
+  let status={state:1,age:0,stationary:true,calibOwner:0,calibGeneration:8,calibCanStart:true,token:'secret'};
+  const nodes=await load(async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>status};});
+  await nodes.start.onclick();
+  status={...status,calibGeneration:9,calibResult:5};
+  await nodes.refresh();
+  assert.equal(nodes.down.disabled,true);
+  assert.equal(requests.filter(x=>x.url==='/api/calibration'&&x.options.body.get('action')==='start').length,1);
+});
+
+test('another tab cannot operate the active calibration',async()=>{
+  const nodes=await load(async()=>({ok:true,json:async()=>({state:3,age:0,token:'secret',calibOwner:99,calibGeneration:8,calibCanSave:true})}));
+  assert.equal(nodes.down.disabled,true);
+  assert.equal(nodes.save.disabled,true);
+  assert.equal(nodes.stop.disabled,false);
+  assert.match(nodes.calibState.textContent,/другая вкладка/);
 });
 
 test('network failure reports stale status and does not enable configuration without token',async()=>{

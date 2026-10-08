@@ -23,6 +23,7 @@
 #include "comm_lift.h"
 #include "serial_interface.h"
 #include "web_config.h"
+#include "web_calibration.h"
 
 static unsigned long g_lastTick = 0;
 
@@ -56,6 +57,7 @@ void setup() {
 void loop() {
   ioUpdate();
   smFastPoll();
+  webCalibrationPoll();
 
   // Длинное нажатие кнопки на базе — полный сброс калибровки.
   if (ioCalibLongPressTriggered()) {

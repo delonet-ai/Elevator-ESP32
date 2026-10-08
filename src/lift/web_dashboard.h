@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "web_control_policy.h"
 
 // Immutable copies cross from the control loop into the HTTP task. Never
 // call the state machine, motor or Preferences from an HTTP callback.
@@ -10,6 +11,9 @@ struct WebSnapshot {
   uint32_t uptime, freeHeap;
   int32_t rssi;
   char ip[16];
+  uint32_t calibOwner, calibGeneration;
+  uint8_t calibResult;
+  bool calibCanStart, calibCanSave;
 };
 
 bool dashboardInit(const char *password);
@@ -18,3 +22,5 @@ void dashboardStop();
 void dashboardPublish(const WebSnapshot &snapshot);
 bool dashboardTakeNetworkRequest(uint32_t &receivedAt);
 void dashboardRejectNetworkRequest();
+bool dashboardTakeCommand(WebCommand &command);
+bool dashboardTakeStopRequest();

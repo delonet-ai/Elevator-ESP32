@@ -21,10 +21,10 @@ uint8_t floorGetNearestFloor(long position);
 
 // Записать измеренный ход и пересчитать этажи. Сохраняется в NVS.
 // steps <= 0 трактуется как «калибровки нет».
-void floorSetFullTravelSteps(long steps);
+bool floorSetFullTravelSteps(long steps);
 
 // Стереть калибровку (в том числе из NVS).
-void floorClearCalibration();
+bool floorClearCalibration();
 
 long floorGetFullTravelSteps();
 

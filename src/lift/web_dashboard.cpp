@@ -14,6 +14,28 @@ bool accepting = false;
 bool published = false;
 uint8_t networkResult = 0; // 0: idle; 1: queued; 2: rejected by control loop.
 QueueHandle_t networkQueue = nullptr;
+QueueHandle_t commandQueue = nullptr;
+bool stopPending = false;
+
+bool csrfValid(AsyncWebServerRequest *request) {
+  if (request->hasHeader("X-Lift-Token") && request->getHeader("X-Lift-Token")->value() == token) return true;
+  request->send(403, "text/plain", "Invalid token");
+  return false;
+}
+
+bool readNumber(AsyncWebServerRequest *request, const char *key, uint32_t &value) {
+  if (!request->hasParam(key, true)) return false;
+  String text = request->getParam(key, true)->value();
+  if (text.isEmpty() || text.length() > 10) return false;
+  uint64_t parsed = 0;
+  for (size_t i = 0; i < text.length(); ++i) {
+    if (text[i] < '0' || text[i] > '9') return false;
+    parsed = parsed * 10 + text[i] - '0';
+  }
+  if (!parsed || parsed > UINT32_MAX) return false;
+  value = (uint32_t)parsed;
+  return true;
+}
 
 bool authorize(AsyncWebServerRequest *request) {
   if (!request->authenticate("admin", password.c_str())) {
@@ -33,7 +55,8 @@ bool dashboardInit(const char *accessPassword) {
   password = accessPassword;
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
-  if (!networkQueue) return false;
+  commandQueue = xQueueCreate(4, sizeof(WebCommand));
+  if (!networkQueue || !commandQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -48,28 +71,27 @@ bool dashboardInit(const char *accessPassword) {
     s = latest;
     result = networkResult;
     portEXIT_CRITICAL(&snapshotMux);
-    char json[768];
+    char json[1024];
     snprintf(json, sizeof(json),
       "{\"state\":%u,\"floor\":%u,\"target\":%u,\"position\":%ld,\"known\":%s,"
       "\"error\":%u,\"top\":%s,\"speed\":%u,\"peer\":%s,\"channel\":%u,"
       "\"uptime\":%lu,\"ip\":\"%s\",\"token\":\"%s\",\"stationary\":%s,"
       "\"running\":%s,\"travel\":%ld,\"freeHeap\":%lu,\"rssi\":%ld,"
-      "\"age\":%lu,\"networkResult\":%u}",
+      "\"age\":%lu,\"networkResult\":%u,\"calibOwner\":%lu,\"calibGeneration\":%lu,"
+      "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s}",
       s.state,s.floor,s.target,(long)s.position,s.known?"true":"false",s.error,
       s.top?"true":"false",s.speed,s.peer?"true":"false",s.channel,
       (unsigned long)s.uptime,s.ip,token.c_str(),s.stationary?"true":"false",
       s.running?"true":"false",(long)s.travel,(unsigned long)s.freeHeap,(long)s.rssi,
-      (unsigned long)(millis()-s.uptime),result);
+      (unsigned long)(millis()-s.uptime),result,(unsigned long)s.calibOwner,
+      (unsigned long)s.calibGeneration,s.calibResult,s.calibCanStart?"true":"false",s.calibCanSave?"true":"false");
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
   });
   server.on("/api/network", HTTP_POST, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
-    if (!request->hasHeader("X-Lift-Token") || request->getHeader("X-Lift-Token")->value() != token) {
-      request->send(403, "text/plain", "Invalid token");
-      return;
-    }
+    if (!csrfValid(request)) return;
     const uint32_t now = millis();
     bool allowed;
     portENTER_CRITICAL(&snapshotMux);
@@ -84,6 +106,42 @@ bool dashboardInit(const char *accessPassword) {
     }
     request->send(202, "text/plain; charset=utf-8",
       "Запрос принят. После проверки остановки появится точка Lift-Setup; подключитесь к ней и откройте http://192.168.4.1");
+  });
+  server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!authorize(request) || !csrfValid(request)) return;
+    portENTER_CRITICAL(&snapshotMux);
+    stopPending = true;
+    portEXIT_CRITICAL(&snapshotMux);
+    request->send(202, "text/plain; charset=utf-8", "Остановка запрошена");
+  });
+  server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!authorize(request) || !csrfValid(request)) return;
+    WebCommand cmd = {};
+    if (!request->hasParam("action", true) ||
+        !readNumber(request, "owner", cmd.owner) ||
+        !readNumber(request, "generation", cmd.generation) ||
+        !readNumber(request, "sequence", cmd.sequence)) {
+      request->send(400, "text/plain", "Invalid command"); return;
+    }
+    String action = request->getParam("action", true)->value();
+    if      (action == "start") cmd.action = WebAction::Start;
+    else if (action == "heartbeat") cmd.action = WebAction::Heartbeat;
+    else if (action == "down") cmd.action = WebAction::Down;
+    else if (action == "pause") cmd.action = WebAction::Pause;
+    else if (action == "save") cmd.action = WebAction::Save;
+    else if (action == "reset") cmd.action = WebAction::Reset;
+    else { request->send(400, "text/plain", "Unknown action"); return; }
+    cmd.receivedAt = millis();
+    bool allowed;
+    portENTER_CRITICAL(&snapshotMux);
+    allowed = accepting && !stopPending && networkResult != 1 &&
+      cmd.receivedAt-latest.uptime < 1000 && cmd.generation == latest.calibGeneration;
+    portEXIT_CRITICAL(&snapshotMux);
+    if (!allowed) { request->send(409, "text/plain", "Stale or unavailable session"); return; }
+    if (xQueueSend(commandQueue, &cmd, 0) != pdTRUE) {
+      request->send(503, "text/plain", "Command queue busy"); return;
+    }
+    request->send(202, "text/plain", "Queued");
   });
   return true;
 }
@@ -118,4 +176,16 @@ void dashboardRejectNetworkRequest() {
   portENTER_CRITICAL(&snapshotMux);
   networkResult = 2;
   portEXIT_CRITICAL(&snapshotMux);
+}
+
+bool dashboardTakeCommand(WebCommand &command) {
+  return commandQueue && xQueueReceive(commandQueue, &command, 0) == pdTRUE;
+}
+
+bool dashboardTakeStopRequest() {
+  portENTER_CRITICAL(&snapshotMux);
+  bool requested = stopPending;
+  stopPending = false;
+  portEXIT_CRITICAL(&snapshotMux);
+  return requested;
 }

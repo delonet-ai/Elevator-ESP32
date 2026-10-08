@@ -7,6 +7,8 @@
 #include <WiFiManager.h>
 #include "web_dashboard.h"
 #include "floor_manager.h"
+#include "web_calibration.h"
+#include "config.h"
 #include <Preferences.h>
 #include <esp_system.h>
 
@@ -38,7 +40,7 @@ void startPortal() {
 }
 }
 
-bool webMotionLocked() { return locked; }
+bool webMotionLocked() { return locked || webCalibrationBlocksCommands(); }
 
 void webPrintNetwork() {
   Serial.printf("[WEB] Setup AP: %s password: %s\n", apName.c_str(), password.c_str());
@@ -107,6 +109,13 @@ void webUpdate() {
     snapshot.top = ioTopSwitchActive();
     snapshot.peer = commHasPeer();
     snapshot.stationary = stationary() && !locked;
+    snapshot.calibOwner = webCalibrationOwner();
+    snapshot.calibGeneration = webCalibrationGeneration();
+    snapshot.calibResult = webCalibrationResult();
+    snapshot.calibCanStart = !webMotionLocked() && !motorIsRunning() &&
+      (stationary() || smGetState() == STATE_CALIB_MOVING_DOWN);
+    snapshot.calibCanSave = snapshot.calibOwner && smGetState() == STATE_CALIB_MOVING_DOWN &&
+      !motorIsRunning() && smGetPosition() <= -(TOP_MARGIN_STEPS + MIN_TRAVEL_STEPS);
     snapshot.running = motorIsRunning();
     snapshot.position = smGetPosition();
     snapshot.travel = floorGetFullTravelSteps();
