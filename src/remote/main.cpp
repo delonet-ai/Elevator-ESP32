@@ -24,6 +24,7 @@ unsigned long g_lastDisplayMs = 0;
 unsigned long g_lastLedMs     = 0;
 unsigned long g_lastHoldUpMs   = 0;
 unsigned long g_lastHoldDownMs = 0;
+bool g_controlsArmed = false;
 
 void sendStopRepeated() {
   // Потерянный пакет «кнопка отпущена» оставил бы кабину в движении,
@@ -76,36 +77,50 @@ void loop() {
   buttonsUpdate();
   commUpdate();
 
+  if (!commHasLink()) g_controlsArmed = false;
+  if (!g_controlsArmed) {
+    bool allReleased = true;
+    for (uint8_t i = 0; i < BTN_COUNT; ++i) {
+      ButtonId id = static_cast<ButtonId>(i);
+      if (buttonPressed(id)) allReleased = false;
+      buttonJustPressed(id);
+      buttonJustReleased(id);
+    }
+    if (commHasLink() && allReleased) g_controlsArmed = true;
+  }
+
   // --- UP / DOWN: команды удержания ---
   // Фронты читаем один раз за проход: buttonJustPressed() сбрасывает флаг,
   // и повторный вызов внутри условия его бы «съел».
-  const bool upPressed    = buttonJustPressed(BTN_UP);
-  const bool upReleased   = buttonJustReleased(BTN_UP);
-  const bool downPressed  = buttonJustPressed(BTN_DOWN);
-  const bool downReleased = buttonJustReleased(BTN_DOWN);
+  if (g_controlsArmed) {
+    const bool upPressed    = buttonJustPressed(BTN_UP);
+    const bool upReleased   = buttonJustReleased(BTN_UP);
+    const bool downPressed  = buttonJustPressed(BTN_DOWN);
+    const bool downReleased = buttonJustReleased(BTN_DOWN);
 
-  if (upPressed) {
-    g_lastHoldUpMs = now;
-    commSend(CMD_MANUAL_UP, 0);
-  } else if (buttonPressed(BTN_UP) && (now - g_lastHoldUpMs >= HOLD_REPEAT_MS)) {
-    g_lastHoldUpMs = now;
-    commSend(CMD_MANUAL_UP, 0);
+    if (upPressed) {
+      g_lastHoldUpMs = now;
+      commSend(CMD_MANUAL_UP, 0);
+    } else if (buttonPressed(BTN_UP) && (now - g_lastHoldUpMs >= HOLD_REPEAT_MS)) {
+      g_lastHoldUpMs = now;
+      commSend(CMD_MANUAL_UP, 0);
+    }
+    if (upReleased) sendStopRepeated();
+
+    if (downPressed) {
+      g_lastHoldDownMs = now;
+      commSend(CMD_MANUAL_DOWN, 0);
+    } else if (buttonPressed(BTN_DOWN) && (now - g_lastHoldDownMs >= HOLD_REPEAT_MS)) {
+      g_lastHoldDownMs = now;
+      commSend(CMD_MANUAL_DOWN, 0);
+    }
+    if (downReleased) sendStopRepeated();
+
+    // --- Этажи ---
+    handleFloorButton(BTN_F1, 1);
+    handleFloorButton(BTN_F2, 2);
+    handleFloorButton(BTN_F3, 3);
   }
-  if (upReleased) sendStopRepeated();
-
-  if (downPressed) {
-    g_lastHoldDownMs = now;
-    commSend(CMD_MANUAL_DOWN, 0);
-  } else if (buttonPressed(BTN_DOWN) && (now - g_lastHoldDownMs >= HOLD_REPEAT_MS)) {
-    g_lastHoldDownMs = now;
-    commSend(CMD_MANUAL_DOWN, 0);
-  }
-  if (downReleased) sendStopRepeated();
-
-  // --- Этажи ---
-  handleFloorButton(BTN_F1, 1);
-  handleFloorButton(BTN_F2, 2);
-  handleFloorButton(BTN_F3, 3);
 
   // --- Индикация ---
   if (now - g_lastLedMs >= LED_PERIOD_MS) {

@@ -4,6 +4,7 @@
 #include "floor_manager.h"
 #include "motor_controller.h"
 #include "log.h"
+#include "web_config.h"
 
 namespace {
 
@@ -24,6 +25,7 @@ void printHelp() {
   Serial.println(F("  CLEAR             - сбросить ошибку"));
   Serial.println(F("  STATUS            - состояние"));
   Serial.println(F("  HELP              - эта справка"));
+  Serial.println(F("  NETWORK           - IP and setup access credentials (USB only)"));
 }
 
 void handleCommand(const char *cmd) {
@@ -54,6 +56,7 @@ void handleCommand(const char *cmd) {
   else if (!strcmp(cmd, "CLEAR"))  smCommandClearError();
   else if (!strcmp(cmd, "STATUS")) smPrintStatus(Serial);
   else if (!strcmp(cmd, "HELP"))   printHelp();
+  else if (!strcmp(cmd, "NETWORK")) webPrintNetwork();
   else Serial.printf("Unknown command: %s\n", cmd);
 }
 

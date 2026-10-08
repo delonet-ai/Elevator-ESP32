@@ -22,6 +22,7 @@
 #include "state_machine.h"
 #include "comm_lift.h"
 #include "serial_interface.h"
+#include "web_config.h"
 
 static unsigned long g_lastTick = 0;
 
@@ -42,6 +43,7 @@ void setup() {
   floorInit();
   calibInit();
   smInit();
+  webInit();
 
   if (!commInit()) {
     LOG_E("[LIFT] ESP-NOW init failed, remote will not work");
@@ -71,4 +73,5 @@ void loop() {
   }
 
   commSendStatusIfDue();
+  webUpdate();
 }

@@ -1,4 +1,5 @@
 #include "state_machine.h"
+#include "web_config.h"
 #include "motor_controller.h"
 #include "io_manager.h"
 #include "floor_manager.h"
@@ -267,6 +268,7 @@ void smTick() {
 // ----------------------------------------------------------------- команды
 
 void smCommandMoveToFloor(uint8_t floor) {
+  if (webMotionLocked()) return;
   if (floor < 1 || floor > FLOOR_COUNT) {
     LOG_W("[SM] Invalid floor %u", floor);
     return;
@@ -339,6 +341,7 @@ void smCommandStop() {
 }
 
 void smCommandStartCalib() {
+  if (webMotionLocked()) return;
   if (g_state == STATE_MOVING || g_state == STATE_MANUAL_MOVE ||
       g_state == STATE_HOMING) {
     LOG_W("[SM] Cannot start calibration while moving");
@@ -356,6 +359,7 @@ void smCommandStartCalib() {
 }
 
 void smCommandCalibDownHold() {
+  if (webMotionLocked()) return;
   if (g_state != STATE_CALIB_MOVING_DOWN) {
     LOG_W("[SM] Calib DOWN ignored in state %u", (unsigned)g_state);
     return;
@@ -392,6 +396,7 @@ void smCommandCalibDownSave() {
 }
 
 void smCommandManualUpHold() {
+  if (webMotionLocked()) return;
   // Из NEED_HOMING кнопка «вверх» запускает хоминг: ехать вверх безопасно,
   // концевик всё равно остановит.
   if (g_state == STATE_NEED_HOMING) {
@@ -417,6 +422,7 @@ void smCommandManualUpHold() {
 }
 
 void smCommandManualDownHold() {
+  if (webMotionLocked()) return;
   if (g_state == STATE_CALIB_MOVING_DOWN) {
     smCommandCalibDownHold();
     return;
@@ -456,6 +462,7 @@ void smCommandManualStop() {
 }
 
 void smCommandStartHoming() {
+  if (webMotionLocked()) return;
   if (!calibIsValid()) {
     LOG_W("[SM] Homing ignored: not calibrated");
     return;

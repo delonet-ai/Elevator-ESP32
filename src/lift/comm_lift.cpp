@@ -19,6 +19,10 @@ const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // Очередь глубиной 8: команд приходит немного, но при заторе в loop()
 // лучше потерять самые старые, чем блокировать задачу Wi-Fi.
 QueueHandle_t g_cmdQueue = nullptr;
+struct QueuedCommand {
+  RemoteCommand command;
+  unsigned long receivedAt;
+};
 
 uint8_t g_remoteMac[6]   = {0};
 volatile bool g_haveRemoteMac = false;
@@ -36,7 +40,7 @@ bool addPeer(const uint8_t *mac) {
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, mac, 6);
-  peer.channel = ESPNOW_CHANNEL;
+  peer.channel = 0; // Follow the station/AP channel chosen by the router.
   peer.encrypt = false;
   peer.ifidx   = WIFI_IF_STA;
 
@@ -70,7 +74,8 @@ ESPNOW_RECV_CB(onRecv) {
 
   if (g_cmdQueue != nullptr) {
     // Не ждём места в очереди: задача Wi-Fi не должна блокироваться.
-    xQueueSend(g_cmdQueue, &cmd, 0);
+    QueuedCommand queued = {cmd, millis()};
+    xQueueSend(g_cmdQueue, &queued, 0);
   }
 }
 
@@ -106,22 +111,18 @@ void handleCommand(const RemoteCommand &cmd) {
 }  // namespace
 
 bool commInit() {
-  g_cmdQueue = xQueueCreate(8, sizeof(RemoteCommand));
+  g_cmdQueue = xQueueCreate(8, sizeof(QueuedCommand));
   if (g_cmdQueue == nullptr) {
     LOG_E("[COMM] Queue allocation failed");
     return false;
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  // Канал фиксируем явно: иначе стороны могут оказаться на разных каналах
-  // и «молча» не слышать друг друга.
-  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  // webInit owns WiFi mode and connection. Do not disconnect or reset its channel.
 
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   LOG_I("[COMM] Base MAC %02X:%02X:%02X:%02X:%02X:%02X, channel %u",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ESPNOW_CHANNEL);
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], WiFi.channel());
 
   if (esp_now_init() != ESP_OK) {
     LOG_E("[COMM] esp_now_init failed");
@@ -154,9 +155,13 @@ void commPoll() {
 
   if (g_cmdQueue == nullptr) return;
 
-  RemoteCommand cmd;
-  while (xQueueReceive(g_cmdQueue, &cmd, 0) == pdTRUE) {
-    handleCommand(cmd);
+  QueuedCommand queued;
+  while (xQueueReceive(g_cmdQueue, &queued, 0) == pdTRUE) {
+    // HTTP / provisioning may wait while stationary. Never execute an old
+    // movement command after such a wait; stop commands remain valid.
+    if (millis() - queued.receivedAt > 250 &&
+        queued.command.type != CMD_STOP && queued.command.type != CMD_MANUAL_STOP) continue;
+    handleCommand(queued.command);
   }
 }
 
