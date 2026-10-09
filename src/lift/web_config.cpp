@@ -99,6 +99,9 @@ void webUpdate() {
   if (now - lastSnapshot >= 100) {
     lastSnapshot = now;
     WebSnapshot snapshot = {};
+    snapshot.motion = motionSettings();
+    snapshot.motionRevision = motionRevision();
+    snapshot.motionStorage = motionStorageStatus();
     snapshot.state = smGetState();
     snapshot.floor = smGetCurrentFloor();
     snapshot.target = smGetTargetFloor();
@@ -132,6 +135,17 @@ void webUpdate() {
     // browser read its snapshot. Never defer a rejected request until idle.
     if (!locked && stationary() && millis() - requestedAt <= 2000) startPortal();
     else dashboardRejectNetworkRequest();
+  }
+  MotionRequest motionRequest;
+  if (dashboardTakeMotionRequest(motionRequest)) {
+    const uint8_t result = motionApply(motionRequest, millis(),
+      !webMotionLocked() && stationary() && WiFi.status() == WL_CONNECTED);
+    if (result == 2) {
+      motorSetAccel(motionSettings().acceleration);
+      motorSetSpeedLimit(motionSettings().minimum +
+        (motionSettings().maximum - motionSettings().minimum) * (ioSpeedPercent() / 100.0f));
+    }
+    dashboardMotionResult(result);
   }
   // Provisioning may block; the dashboard itself runs in the HTTP task.
   if (!stationary()) return;

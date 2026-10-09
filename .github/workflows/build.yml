@@ -23,6 +23,8 @@ jobs:
           /tmp/web-runtime-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/calibration_storage_test.cpp -o /tmp/calibration-storage-test
           /tmp/calibration-storage-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/motion_settings_test.cpp -o /tmp/motion-settings-test
+          /tmp/motion-settings-test
 
   firmware:
     runs-on: ubuntu-latest

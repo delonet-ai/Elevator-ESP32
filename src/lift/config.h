@@ -1,17 +1,12 @@
 #pragma once
 //
-// Настройки движения и защит. Всё, что подбирается под конкретное железо,
-// собрано здесь.
+// Пределы движения и настройки защит. Изменяемый профиль — в motion_settings.h.
 //
 #include <Arduino.h>
 
-// --- Профиль скорости (шагов/сек) ---
-static const float SPEED_MIN            = 200.0f;   // нижняя граница регулировки
-static const float SPEED_MAX            = 2000.0f;  // верхняя граница регулировки
-static const float SPEED_MANUAL         = 400.0f;   // ручное движение с пульта
-static const float SPEED_HOMING         = 400.0f;   // подход к концевику
-static const float CALIB_DOWN_MULTIPLIER = 3.0f;    // ускорение спуска в калибровке
-static const float ACCEL_STEPS_PER_S2   = 1800.0f;  // разгон и торможение
+// --- Абсолютные пределы скорости (шагов/сек) ---
+static const float SPEED_MIN = 200.0f;
+static const float SPEED_MAX = 2000.0f;
 
 // --- Геометрия шахты (шаги) ---
 // Концевик стоит выше 3-го этажа; запас между ними.
@@ -28,7 +23,7 @@ static const long CALIB_MAX_TRAVEL_STEPS = 100000;
 
 // --- Таймауты (мс) ---
 // Таймаут поездки считается от расстояния: на минимуме регулятора скорости
-// (SPEED_MIN) полный проезд шахты занимает секунды, и фиксированный порог
+// полный проезд шахты занимает секунды, и фиксированный порог
 // срабатывал бы как ложная ошибка.
 static const uint32_t MOTION_TIMEOUT_MIN_MS   = 5000;   // нижняя граница
 static const float    MOTION_TIMEOUT_FACTOR   = 1.5f;   // запас к расчётному времени

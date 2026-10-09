@@ -22,6 +22,84 @@ async function load(fetch) {
   return nodes;
 }
 
+const defaultMotion={minimum:200,maximum:2000,manual:400,homing:400,down:1200,acceleration:1800};
+function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationary:true,calibOwner:0,motion:{...defaultMotion},motionRevision:1,motionStorage:0,motionResult:0,...extra}; }
+
+test('old status received while settings POST is pending cannot reject the new request',async()=>{
+  let status=motionStatus({motionResult:4}),reply;
+  const nodes=await load(async(url,options)=>{
+    if(options?.method==='POST')return new Promise(resolve=>reply=resolve);
+    return {ok:true,json:async()=>status};
+  });
+  nodes.manual.value='600';nodes.manual.oninput();const sending=nodes.motionSave.onclick();
+  await nodes.refresh();assert.equal(nodes.motionSave.disabled,true);
+  assert.doesNotMatch(nodes.motionMessage.textContent,/Ошибка записи/);
+  reply({ok:true});await sending;
+  status={...status,motionRevision:2,motionResult:2,motion:{...defaultMotion,manual:600}};
+  await nodes.refresh();assert.match(nodes.motionMessage.textContent,/сохранены и применены/);
+});
+
+test('motion edits survive polling and wait for persisted revision before success',async()=>{
+  let status=motionStatus();const posts=[];
+  const nodes=await load(async(url,options)=>{
+    if(options?.method==='POST')posts.push({url,options});
+    return {ok:true,json:async()=>status,text:async()=> 'Queued'};
+  });
+  assert.equal(nodes.maximum.value,'2000');
+  nodes.maximum.value='1400';nodes.maximum.oninput();
+  await nodes.refresh();assert.equal(nodes.maximum.value,'1400');
+  await nodes.motionSave.onclick();
+  assert.equal(posts[0].url,'/api/motion');
+  assert.equal(posts[0].options.headers['X-Lift-Token'],'boot-1');
+  assert.equal(posts[0].options.body.get('maximum'),'1400');
+  assert.equal(posts[0].options.body.get('revision'),'1');
+  assert.match(nodes.motionMessage.textContent,/Ожидание/);
+  status={...status,motionResult:2};await nodes.refresh();
+  assert.equal(nodes.motionSave.disabled,true); // Result without new snapshot is insufficient.
+  status={...status,motionRevision:2,motion:{...defaultMotion,maximum:1400}};
+  await nodes.refresh();assert.match(nodes.motionMessage.textContent,/сохранены и применены/);
+  assert.equal(nodes.motionSave.disabled,false);
+});
+
+test('motion storage failure preserves edits; reload discards them explicitly',async()=>{
+  let status=motionStatus();
+  const nodes=await load(async()=>({ok:true,json:async()=>status,text:async()=> 'Queued'}));
+  nodes.manual.value='600';nodes.manual.oninput();await nodes.motionSave.onclick();
+  status={...status,motionResult:4};await nodes.refresh();
+  assert.match(nodes.motionMessage.textContent,/Ошибка записи/);assert.equal(nodes.manual.value,'600');
+  nodes.motionReload.onclick();assert.equal(nodes.manual.value,'400');
+});
+
+test('motion form rejects invalid input and disables changes during calibration or movement',async()=>{
+  let status=motionStatus();let posts=0;
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts++;return {ok:true,json:async()=>status};});
+  nodes.minimum.value='2001';nodes.minimum.oninput();await nodes.motionSave.onclick();
+  assert.equal(posts,0);assert.match(nodes.motionMessage.textContent,/диапазоны/);
+  status={...status,stationary:false,state:3};await nodes.refresh();
+  assert.equal(nodes.motionSave.disabled,true);assert.equal(nodes.manual.disabled,true);
+  status={...status,stationary:true,state:4,calibOwner:42};await nodes.refresh();assert.equal(nodes.motionSave.disabled,true);
+});
+
+test('another tab cannot silently replace a dirty form; reboot requires reload',async()=>{
+  let status=motionStatus();const posts=[];
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>status};});
+  nodes.manual.value='600';nodes.manual.oninput();
+  status={...status,motionRevision:2,motion:{...defaultMotion,manual:800}};
+  await nodes.refresh();assert.equal(nodes.manual.value,'600');
+  await nodes.motionSave.onclick();assert.equal(posts[0].body.get('revision'),'1');
+  await nodes.refresh();assert.match(nodes.motionMessage.textContent,/другой вкладкой/);
+  status={...status,token:'boot-2',motionRevision:1};await nodes.refresh();
+  assert.equal(nodes.motionSave.disabled,true);assert.match(nodes.motionMessage.textContent,/перезапущена/);
+  nodes.motionReload.onclick();await nodes.refresh();
+  assert.equal(nodes.motionSave.disabled,false);assert.equal(nodes.manual.value,'800');
+});
+
+test('motion defaults only populate the form and do not send a command',async()=>{
+  let posts=0;const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts++;return {ok:true,json:async()=>motionStatus({motion:{...defaultMotion,manual:600}})};});
+  nodes.motionDefaults.onclick();assert.equal(nodes.manual.value,'400');assert.equal(posts,0);
+  await nodes.refresh();assert.equal(nodes.manual.value,'400');
+});
+
 test('renders real status and sends authenticated network-change token', async()=>{
   const requests=[];
   const nodes=await load(async(url,options)=>{

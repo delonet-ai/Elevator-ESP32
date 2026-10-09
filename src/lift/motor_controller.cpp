@@ -1,6 +1,7 @@
 #include "motor_controller.h"
 #include "pins.h"
 #include "config.h"
+#include "motion_settings.h"
 #include "log.h"
 
 #include <FastAccelStepper.h>
@@ -55,7 +56,8 @@ bool motorInit() {
   g_stepper->setAutoEnable(false);
   g_stepper->enableOutputs();
 
-  g_stepper->setAcceleration((int32_t)ACCEL_STEPS_PER_S2);
+  g_speedLimit = motionSettings().minimum;
+  g_stepper->setAcceleration((int32_t)motionSettings().acceleration);
   g_stepper->setSpeedInHz(clampSpeed(g_speedLimit));
   g_stepper->setCurrentPosition(0);
 

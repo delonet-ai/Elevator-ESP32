@@ -6,6 +6,7 @@
 #include "floor_manager.h"
 #include "calibration_manager.h"
 #include "config.h"
+#include "motion_settings.h"
 #include "log.h"
 
 namespace {
@@ -202,7 +203,7 @@ void smFastPoll() {
 
 void smTick() {
   // Потенциометр задаёт предел скорости автоматических поездок.
-  motorSetSpeedLimit(SPEED_MIN + (SPEED_MAX - SPEED_MIN) *
+  motorSetSpeedLimit(motionSettings().minimum + (motionSettings().maximum - motionSettings().minimum) *
                                  ((float)ioSpeedPercent() / 100.0f));
 
   unsigned long now = millis();
@@ -315,8 +316,10 @@ void smCommandMoveToFloor(uint8_t floor) {
 
   // Худший случай — регулятор скорости выкручен в минимум.
   unsigned long expected =
-      (unsigned long)((labs(dest - pos) * 1000.0f / SPEED_MIN) * MOTION_TIMEOUT_FACTOR);
-  g_motionTimeoutMs = expected + MOTION_TIMEOUT_MIN_MS;
+      (unsigned long)((labs(dest - pos) * 1000.0f / motionSettings().minimum) * MOTION_TIMEOUT_FACTOR);
+  // Allow both ramps when a low acceleration is selected in the web UI.
+  const unsigned long rampAllowance = 2000UL * motionSettings().maximum / motionSettings().acceleration;
+  g_motionTimeoutMs = expected + rampAllowance + MOTION_TIMEOUT_MIN_MS;
 
   motorMoveTo(dest);
   LOG_I("[SM] Moving to floor %u (pos %ld -> %ld)", floor, pos, dest);
@@ -369,7 +372,7 @@ void smCommandStartCalib() {
     handleTopSwitch();
     return;
   }
-  motorRunUp(SPEED_HOMING);
+  motorRunUp(motionSettings().homing);
   LOG_I("[SM] Calibration started: homing up");
 }
 
@@ -382,7 +385,7 @@ void smCommandCalibDownHold() {
   if (!g_calibDescending) {
     g_calibDescending = true;
     g_motionStartMs   = millis();
-    motorRunDown(SPEED_MANUAL * CALIB_DOWN_MULTIPLIER);
+    motorRunDown(motionSettings().down);
   }
   holdRefresh();
 }
@@ -436,7 +439,7 @@ void smCommandManualUpHold() {
     g_manualDir     = 1;
     g_targetFloor   = 0;
     g_motionStartMs = millis();
-    motorRunUp(SPEED_MANUAL);
+    motorRunUp(motionSettings().manual);
   }
   holdRefresh();
 }
@@ -462,7 +465,7 @@ void smCommandManualDownHold() {
     g_manualDir     = -1;
     g_targetFloor   = 0;
     g_motionStartMs = millis();
-    motorRunDown(SPEED_MANUAL);
+    motorRunDown(motionSettings().manual);
   }
   holdRefresh();
 }
@@ -499,7 +502,7 @@ void smCommandStartHoming() {
   g_targetFloor   = 0;
   g_state         = STATE_HOMING;
   g_motionStartMs = millis();
-  motorRunUp(SPEED_HOMING);
+  motorRunUp(motionSettings().homing);
   LOG_I("[SM] Homing up to top switch");
 }
 

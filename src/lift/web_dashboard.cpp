@@ -16,6 +16,8 @@ uint8_t networkResult = 0; // 0: idle; 1: queued; 2: rejected by control loop.
 QueueHandle_t networkQueue = nullptr;
 QueueHandle_t commandQueue = nullptr;
 bool stopPending = false;
+QueueHandle_t motionQueue = nullptr;
+uint8_t motionResult = 0; // 1 queued, 2 saved, 3 rejected, 4 storage failure.
 
 bool csrfValid(AsyncWebServerRequest *request) {
   if (request->hasHeader("X-Lift-Token") && request->getHeader("X-Lift-Token")->value() == token) return true;
@@ -56,7 +58,8 @@ bool dashboardInit(const char *accessPassword) {
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
-  if (!networkQueue || !commandQueue) return false;
+  motionQueue = xQueueCreate(1, sizeof(MotionRequest));
+  if (!networkQueue || !commandQueue || !motionQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -66,25 +69,31 @@ bool dashboardInit(const char *accessPassword) {
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     WebSnapshot s;
-    uint8_t result;
+    uint8_t result, settingsResult;
     portENTER_CRITICAL(&snapshotMux);
     s = latest;
     result = networkResult;
+    settingsResult = motionResult;
     portEXIT_CRITICAL(&snapshotMux);
-    char json[1024];
+    char json[1536];
     snprintf(json, sizeof(json),
       "{\"state\":%u,\"floor\":%u,\"target\":%u,\"position\":%ld,\"known\":%s,"
       "\"error\":%u,\"top\":%s,\"speed\":%u,\"peer\":%s,\"channel\":%u,"
       "\"uptime\":%lu,\"ip\":\"%s\",\"token\":\"%s\",\"stationary\":%s,"
       "\"running\":%s,\"travel\":%ld,\"freeHeap\":%lu,\"rssi\":%ld,"
       "\"age\":%lu,\"networkResult\":%u,\"calibOwner\":%lu,\"calibGeneration\":%lu,"
-      "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s}",
+      "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s,"
+      "\"motionRevision\":%lu,\"motionResult\":%u,\"motionStorage\":%u,"
+      "\"motion\":{\"minimum\":%lu,\"maximum\":%lu,\"manual\":%lu,\"homing\":%lu,\"down\":%lu,\"acceleration\":%lu}}",
       s.state,s.floor,s.target,(long)s.position,s.known?"true":"false",s.error,
       s.top?"true":"false",s.speed,s.peer?"true":"false",s.channel,
       (unsigned long)s.uptime,s.ip,token.c_str(),s.stationary?"true":"false",
       s.running?"true":"false",(long)s.travel,(unsigned long)s.freeHeap,(long)s.rssi,
       (unsigned long)(millis()-s.uptime),result,(unsigned long)s.calibOwner,
-      (unsigned long)s.calibGeneration,s.calibResult,s.calibCanStart?"true":"false",s.calibCanSave?"true":"false");
+      (unsigned long)s.calibGeneration,s.calibResult,s.calibCanStart?"true":"false",s.calibCanSave?"true":"false",
+      (unsigned long)s.motionRevision, settingsResult, s.motionStorage,
+      (unsigned long)s.motion.minimum, (unsigned long)s.motion.maximum, (unsigned long)s.motion.manual,
+      (unsigned long)s.motion.homing, (unsigned long)s.motion.down, (unsigned long)s.motion.acceleration);
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
@@ -106,6 +115,33 @@ bool dashboardInit(const char *accessPassword) {
     }
     request->send(202, "text/plain; charset=utf-8",
       "Запрос принят. После проверки остановки появится точка Lift-Setup; подключитесь к ней и откройте http://192.168.4.1");
+  });
+  server.on("/api/motion", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!authorize(request) || !csrfValid(request)) return;
+    MotionRequest cmd = {};
+    if (!readNumber(request, "revision", cmd.revision) ||
+        !readNumber(request, "minimum", cmd.settings.minimum) ||
+        !readNumber(request, "maximum", cmd.settings.maximum) ||
+        !readNumber(request, "manual", cmd.settings.manual) ||
+        !readNumber(request, "homing", cmd.settings.homing) ||
+        !readNumber(request, "down", cmd.settings.down) ||
+        !readNumber(request, "acceleration", cmd.settings.acceleration) || !motionValid(cmd.settings)) {
+      request->send(400, "text/plain; charset=utf-8", "Недопустимые параметры движения"); return;
+    }
+    cmd.receivedAt = millis();
+    bool allowed;
+    portENTER_CRITICAL(&snapshotMux);
+    allowed = accepting && !stopPending && latest.stationary && !latest.calibOwner &&
+      cmd.receivedAt-latest.uptime < 1000 && networkResult != 1 && motionResult != 1 &&
+      cmd.revision == latest.motionRevision;
+    if (allowed) motionResult = 1;
+    portEXIT_CRITICAL(&snapshotMux);
+    if (!allowed) { request->send(409, "text/plain; charset=utf-8", "Лифт занят или настройки устарели. Обновите форму."); return; }
+    if (xQueueSend(motionQueue, &cmd, 0) != pdTRUE) {
+      dashboardMotionResult(3);
+      request->send(503, "text/plain", "Queue busy"); return;
+    }
+    request->send(202, "text/plain", "Queued");
   });
   server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
     if (!authorize(request) || !csrfValid(request)) return;
@@ -188,4 +224,13 @@ bool dashboardTakeStopRequest() {
   stopPending = false;
   portEXIT_CRITICAL(&snapshotMux);
   return requested;
+}
+
+bool dashboardTakeMotionRequest(MotionRequest &request) {
+  return motionQueue && xQueueReceive(motionQueue, &request, 0) == pdTRUE;
+}
+void dashboardMotionResult(uint8_t result) {
+  portENTER_CRITICAL(&snapshotMux);
+  motionResult = result;
+  portEXIT_CRITICAL(&snapshotMux);
 }

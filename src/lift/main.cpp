@@ -24,6 +24,7 @@
 #include "serial_interface.h"
 #include "web_config.h"
 #include "web_calibration.h"
+#include "motion_settings.h"
 
 static unsigned long g_lastTick = 0;
 
@@ -36,6 +37,7 @@ void setup() {
   ioInit();
   ioUpdate();  // получить достоверное состояние концевика до старта автомата
 
+  motionSettingsInit();
   if (!motorInit()) {
     LOG_E("[LIFT] Motor init failed, halting");
     // Без мотора двигаться нечем; оставляем Serial живым для диагностики.

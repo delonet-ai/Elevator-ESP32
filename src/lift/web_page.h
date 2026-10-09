@@ -5,6 +5,7 @@ const char PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="ru"><meta charset=
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Лифт · Настройки</title>
 <style>
 body{font:16px system-ui;background:#101826;color:#edf3ff;margin:0;padding:24px}main{max-width:760px;margin:auto}h1{margin-bottom:8px}.muted{color:#aabbd4}section{background:#1c293c;border-radius:16px;padding:24px;margin:20px 0}dl{display:grid;grid-template-columns:1fr 1fr;gap:14px}dd{margin:0;text-align:right}button:disabled{opacity:.45;cursor:default}button{background:#73d5b6;color:#10251f;border:0;border-radius:8px;padding:14px;font:inherit;cursor:pointer}.buttons{display:flex;flex-wrap:wrap;gap:10px}.stop{background:#ff8585}.secondary{background:#b2c5df}#down{touch-action:none;user-select:none}a{color:#73d5b6}
+label{display:block;margin:12px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font:inherit;border-radius:6px;border:1px solid #789;background:#101826;color:#edf3ff}
 </style>
 <main><p class="muted">ELEVATOR ESP32</p><h1>Состояние лифта</h1><p id="connection">Подключение…</p>
 <section><dl id="values"></dl></section>
@@ -14,6 +15,15 @@ body{font:16px system-ui;background:#101826;color:#edf3ff;margin:0;padding:24px}
 <button id="save" disabled>Сохранить низ</button><button id="stop" class="stop" disabled>СТОП</button>
 <button id="reset" class="secondary" disabled>Сбросить калибровку</button></div>
 <p id="calibMessage"></p><p class="muted">При уходе со страницы или потере связи веб-калибровка останавливается. Веб-СТОП не заменяет физическую аварийную кнопку. Удерживающий момент мотора сохраняется.</p></section>
+<section><h2>Движение</h2><p>Скорости в шагах/с, ускорение в шагах/с². Регулятор на базе выбирает скорость поездки между минимумом и максимумом. Ручной ход и калибровка используют отдельные скорости.</p>
+<label>Минимум поездки<input id="minimum" type="number" min="200" max="2000" step="1" disabled></label>
+<label>Максимум поездки<input id="maximum" type="number" min="200" max="2000" step="1" disabled></label>
+<label>Ручной ход<input id="manual" type="number" min="200" max="2000" step="1" disabled></label>
+<label>Поиск верхнего концевика<input id="homing" type="number" min="200" max="2000" step="1" disabled></label>
+<label>Спуск при калибровке<input id="calibDown" type="number" min="200" max="2000" step="1" disabled></label>
+<label>Ускорение<input id="acceleration" type="number" min="100" max="1800" step="1" disabled></label>
+<div class="buttons"><button id="motionSave" disabled>Сохранить параметры</button><button id="motionReload" class="secondary" disabled>Загрузить с базы</button><button id="motionDefaults" class="secondary" disabled>Подставить исходные</button></div>
+<p id="motionMessage"></p><p id="motionStorage" class="muted"></p><p class="muted">Сохранение доступно только после остановки и вне калибровки. Подстановка исходных значений требует сохранения. Настройки не запускают мотор.</p></section>
 <section><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
 <button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section></main>
 <script>
@@ -22,6 +32,44 @@ const results=['','Поиск верхней точки запущен','Спу�
 const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
+const motionFields={minimum:'minimum',maximum:'maximum',manual:'manual',homing:'homing',down:'calibDown',acceleration:'acceleration'};
+let motionDirty=false,motionFormRevision=0,motionPending=null,motionBootToken='';
+function fillMotion(values,revision){for(const [key,id] of Object.entries(motionFields))el(id).value=String(values[key]);motionFormRevision=revision;}
+function syncMotion(s,requestAtStart,acknowledgedAtStart){
+  if(!s.motion)return;
+  if(motionBootToken&&motionBootToken!==s.token){
+    motionPending=null;
+    if(motionDirty){motionFormRevision=0;el('motionMessage').textContent='База перезапущена. Загрузите актуальные параметры перед сохранением.';}
+  }
+  motionBootToken=s.token;
+  el('motionStorage').textContent=['Используются исходные значения: сохранённой записи ещё нет.','Параметры сохранены в памяти базы.','Запись не прочитана или повреждена: используются исходные значения.'][s.motionStorage]||'';
+  if(motionPending&&motionPending===requestAtStart&&acknowledgedAtStart){
+    if(s.motionRevision!==motionPending.revision){
+      const matches=Object.keys(motionFields).every(k=>s.motion[k]===motionPending.values[k]);
+      el('motionMessage').textContent=matches?'Параметры сохранены и применены.':'Настройки изменены другой вкладкой. Загрузите значения с базы.';
+      motionPending=null;if(matches)motionDirty=false;
+    }else if(s.motionResult===3||s.motionResult===4){
+      el('motionMessage').textContent=s.motionResult===4?'Ошибка записи в память. Прежние параметры сохранены.':'Запрос отклонён: лифт занят или данные устарели.';motionPending=null;
+    }else if(Date.now()-motionPending.started>5000){el('motionMessage').textContent='Нет подтверждения. Загрузите параметры с базы перед повтором.';motionPending=null;}
+  }
+  if(!motionDirty&&!motionPending)fillMotion(s.motion,s.motionRevision);
+}
+for(const id of Object.values(motionFields))el(id).oninput=()=>{motionDirty=true;};
+el('motionReload').onclick=()=>{if(el('motionReload').disabled)return;fillMotion(snapshot.motion,snapshot.motionRevision);motionDirty=false;el('motionMessage').textContent='Загружены текущие параметры базы.';};
+el('motionDefaults').onclick=()=>{if(el('motionDefaults').disabled)return;fillMotion({minimum:200,maximum:2000,manual:400,homing:400,down:1200,acceleration:1800},motionFormRevision);motionDirty=true;el('motionMessage').textContent='Исходные значения подставлены. Для применения сохраните.';};
+el('motionSave').onclick=async()=>{
+  if(el('motionSave').disabled)return;
+  const values={};for(const [key,id] of Object.entries(motionFields)){const text=el(id).value;values[key]=/^\d+$/.test(text)?Number(text):NaN;}
+  if(Object.entries(values).some(([k,v])=>!Number.isInteger(v)||v<(k==='acceleration'?100:200)||v>(k==='acceleration'?1800:2000))||values.minimum>values.maximum){el('motionMessage').textContent='Проверьте диапазоны: скорости 200–2000, ускорение 100–1800, минимум ≤ максимум.';return;}
+  motionPending={values,revision:motionFormRevision,started:Date.now(),acknowledged:false};
+  el('motionMessage').textContent='Отправка параметров…';controls();
+  try{
+    const r=await fetch('/api/motion',{method:'POST',headers:{'X-Lift-Token':token},body:new URLSearchParams({...values,revision:motionFormRevision}),signal:AbortSignal.timeout(2000)});
+    if(!r.ok)throw Error(await r.text());
+    if(motionPending){motionPending.acknowledged=true;el('motionMessage').textContent='Запрос передан. Ожидание подтверждения базы…';}
+  }catch(e){motionPending=null;el('motionMessage').textContent='Сохранение не подтверждено: '+e.message;}
+  controls();
+};
 function controls(){
   const live=!!token&&!!snapshot, mine=live&&snapshot.calibOwner===owner;
   el('start').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
@@ -29,6 +77,10 @@ function controls(){
   el('save').disabled=!mine||!session||!snapshot.calibCanSave||heldDown||commandBusy;
   el('reset').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
   el('stop').disabled=!token;
+  const editable=live&&!!snapshot.motion&&snapshot.stationary&&!snapshot.calibOwner&&!session&&!motionPending&&snapshot.networkResult!==1;
+  for(const id of Object.values(motionFields))el(id).disabled=!editable;
+  el('motionSave').disabled=!editable||!motionFormRevision;el('motionDefaults').disabled=!editable;
+  el('motionReload').disabled=!live||!snapshot.motion||!!motionPending;
   el('network').disabled=!live||!snapshot.stationary||!!snapshot.calibOwner||snapshot.networkResult===1||session;
 }
 async function sendAction(action){
@@ -49,10 +101,11 @@ async function heartbeat(){
   if(session)heartbeatTimer=setTimeout(heartbeat,150);
 }
 async function update(){
+  const requestAtStart=motionPending,acknowledgedAtStart=!!motionPending?.acknowledged;
   try{
     const r=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(1200)});
     if(!r.ok)throw Error();const s=await r.json();if(s.age>1000)throw Error('stale');
-    token=s.token;snapshot=s;
+    token=s.token;snapshot=s;syncMotion(s,requestAtStart,acknowledgedAtStart);
     if(session){
       if(s.calibGeneration!==generation||(s.calibOwner&&s.calibOwner!==owner))stopSession(false);
       else if(s.calibOwner===owner)awaitingStart=0;
