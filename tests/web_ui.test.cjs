@@ -10,20 +10,87 @@ const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 async function load(fetch) {
   const nodes = {};
   const events = {};
-  function node() { return {textContent:'', children:[], setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
+  const downloads=[];
+  function node(tag) { return {textContent:'', children:[], click(){if(tag==='a')downloads.push({href:this.href,download:this.download});},remove(){},setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
   const context = vm.createContext({fetch, AbortSignal, URLSearchParams, Uint32Array,
     crypto:{getRandomValues:a=>{a[0]=42;return a;}}, confirm:()=>true, setTimeout:()=>{}, clearTimeout:()=>{},
     window:{addEventListener:(name,fn)=>events[name]=fn},
-    document:{addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
+    document:{body:node(),addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
   vm.runInContext(script, context);
   await new Promise(resolve=>setImmediate(resolve));
   nodes.refresh = () => vm.runInContext('update()', context);
   nodes.event = name => events[name]();
+  nodes.downloads=downloads;
+  nodes.importFile=async(text,size=Buffer.byteLength(text))=>{
+    nodes.motionFile.files=[{size,text:async()=>text}];
+    await nodes.motionFile.onchange();
+  };
   return nodes;
 }
 
 const defaultMotion={minimum:200,maximum:2000,manual:400,homing:400,down:1200,acceleration:1800};
 function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationary:true,calibOwner:0,motion:{...defaultMotion},motionRevision:1,motionStorage:0,motionResult:0,...extra}; }
+
+const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
+
+test('backup exports active base parameters without unsaved edits or credentials',async()=>{
+  let posts=0;
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts++;return {ok:true,json:async()=>motionStatus({password:'secret',ip:'192.168.0.2'})};});
+  nodes.manual.value='700';nodes.manual.oninput();nodes.motionExport.onclick();
+  assert.equal(nodes.downloads.length,1);assert.equal(nodes.downloads[0].download,'lift-motion.json');
+  const content=decodeURIComponent(nodes.downloads[0].href.split(',')[1]);
+  assert.deepEqual(JSON.parse(content),JSON.parse(backup()));
+  assert.doesNotMatch(content,/secret|boot-1|192\.168|revision/);
+  assert.equal(posts,0);
+});
+
+test('backup round trip previews values and only explicit save posts them',async()=>{
+  const posts=[];const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>motionStatus(),text:async()=> 'Queued'};});
+  await nodes.importFile('\uFEFF'+backup({...defaultMotion,manual:700}));
+  assert.equal(nodes.manual.value,'700');assert.equal(posts.length,0);
+  assert.match(nodes.motionMessage.textContent,/загружены в поля/);
+  await nodes.refresh();assert.equal(nodes.manual.value,'700');
+  await nodes.motionSave.onclick();assert.equal(posts.length,1);
+  assert.equal(posts[0].body.get('manual'),'700');assert.equal(posts[0].body.get('revision'),'1');
+});
+
+test('invalid backups leave current edits intact and never send commands',async()=>{
+  let posts=0;const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts++;return {ok:true,json:async()=>motionStatus()};});
+  nodes.manual.value='650';nodes.manual.oninput();
+  const missing={...defaultMotion};delete missing.down;
+  for(const text of ['{broken','null','[]',backup(defaultMotion,{version:2}),backup(defaultMotion,{password:'secret'}),
+      backup({...defaultMotion,minimum:2001}),backup({...defaultMotion,minimum:800,maximum:700}),
+      backup({...defaultMotion,manual:'700'}),backup({...defaultMotion,manual:700.5}),
+      backup({...defaultMotion,manual:null}),backup({...defaultMotion,extra:1}),backup(missing)]){
+    await nodes.importFile(text);assert.match(nodes.motionMessage.textContent,/Файл не загружен/);
+    assert.equal(nodes.manual.value,'650');
+  }
+  await nodes.importFile(backup(),4097);assert.match(nodes.motionMessage.textContent,/4 КБ/);
+  assert.equal(nodes.manual.value,'650');assert.equal(posts,0);
+});
+
+test('import cannot finish after motion starts, connection fails, reboot or another tab saves',async()=>{
+  for(const change of [{stationary:false,state:5},{calibOwner:42},{token:'boot-2'},{motionRevision:2},{age:2000}]){
+    let status=motionStatus(),finishRead;
+    const nodes=await load(async()=>({ok:true,json:async()=>status}));
+    nodes.manual.value='650';nodes.manual.oninput();
+    nodes.motionFile.files=[{size:200,text:()=>new Promise(resolve=>finishRead=resolve)}];
+    const importing=nodes.motionFile.onchange();assert.equal(nodes.motionSave.disabled,true);
+    status={...status,...change};await nodes.refresh();
+    finishRead(backup({...defaultMotion,manual:700}));await importing;
+    assert.equal(nodes.manual.value,'650');assert.match(nodes.motionMessage.textContent,/Состояние базы изменилось/);
+  }
+});
+
+test('backup file read failure recovers controls and import is blocked while moving',async()=>{
+  let status=motionStatus();const nodes=await load(async()=>({ok:true,json:async()=>status}));
+  nodes.motionFile.files=[{size:200,text:async()=>{throw Error('Read failed');}}];
+  await nodes.motionFile.onchange();assert.match(nodes.motionMessage.textContent,/Read failed/);
+  assert.equal(nodes.motionImport.disabled,false);
+  status={...status,stationary:false,state:5};await nodes.refresh();
+  assert.equal(nodes.motionImport.disabled,true);assert.equal(nodes.motionExport.disabled,false);
+  await nodes.importFile(backup({...defaultMotion,manual:700}));assert.equal(nodes.manual.value,'400');
+});
 
 test('old status received while settings POST is pending cannot reject the new request',async()=>{
   let status=motionStatus({motionResult:4}),reply;

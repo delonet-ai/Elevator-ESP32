@@ -6,6 +6,7 @@ const char PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="ru"><meta charset=
 <style>
 body{font:16px system-ui;background:#101826;color:#edf3ff;margin:0;padding:24px}main{max-width:760px;margin:auto}h1{margin-bottom:8px}.muted{color:#aabbd4}section{background:#1c293c;border-radius:16px;padding:24px;margin:20px 0}dl{display:grid;grid-template-columns:1fr 1fr;gap:14px}dd{margin:0;text-align:right}button:disabled{opacity:.45;cursor:default}button{background:#73d5b6;color:#10251f;border:0;border-radius:8px;padding:14px;font:inherit;cursor:pointer}.buttons{display:flex;flex-wrap:wrap;gap:10px}.stop{background:#ff8585}.secondary{background:#b2c5df}#down{touch-action:none;user-select:none}a{color:#73d5b6}
 label{display:block;margin:12px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font:inherit;border-radius:6px;border:1px solid #789;background:#101826;color:#edf3ff}
+input[hidden]{display:none}
 </style>
 <main><p class="muted">ELEVATOR ESP32</p><h1>Состояние лифта</h1><p id="connection">Подключение…</p>
 <section><dl id="values"></dl></section>
@@ -23,6 +24,9 @@ label{display:block;margin:12px 0}input{display:block;width:100%;box-sizing:bord
 <label>Спуск при калибровке<input id="calibDown" type="number" min="200" max="2000" step="1" disabled></label>
 <label>Ускорение<input id="acceleration" type="number" min="100" max="1800" step="1" disabled></label>
 <div class="buttons"><button id="motionSave" disabled>Сохранить параметры</button><button id="motionReload" class="secondary" disabled>Загрузить с базы</button><button id="motionDefaults" class="secondary" disabled>Подставить исходные</button></div>
+<h3>Резервная копия</h3><div class="buttons"><button id="motionExport" class="secondary" disabled>Скачать параметры базы</button><button id="motionImport" class="secondary" disabled>Загрузить из файла</button></div>
+<input id="motionFile" type="file" accept=".json,application/json" hidden>
+<p class="muted">Файл содержит только скорости и ускорение. Загрузка заполняет поля для проверки; примените их кнопкой «Сохранить параметры».</p>
 <p id="motionMessage"></p><p id="motionStorage" class="muted"></p><p class="muted">Сохранение доступно только после остановки и вне калибровки. Подстановка исходных значений требует сохранения. Настройки не запускают мотор.</p></section>
 <section><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
 <button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section></main>
@@ -33,7 +37,45 @@ const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
 const motionFields={minimum:'minimum',maximum:'maximum',manual:'manual',homing:'homing',down:'calibDown',acceleration:'acceleration'};
-let motionDirty=false,motionFormRevision=0,motionPending=null,motionBootToken='';
+let motionDirty=false,motionFormRevision=0,motionPending=null,motionBootToken='',motionImporting=false;
+function validMotion(values){
+  return !!values&&typeof values==='object'&&!Array.isArray(values)&&
+    Object.keys(values).length===Object.keys(motionFields).length&&
+    Object.keys(motionFields).every(k=>Object.hasOwn(values,k)&&Number.isInteger(values[k])&&
+      values[k]>=(k==='acceleration'?100:200)&&values[k]<=(k==='acceleration'?1800:2000))&&values.minimum<=values.maximum;
+}
+function motionAvailable(){return !!token&&!!snapshot?.motion&&snapshot.stationary&&!snapshot.calibOwner&&!session&&!motionPending&&snapshot.networkResult!==1;}
+el('motionExport').onclick=()=>{
+  if(el('motionExport').disabled)return;
+  const motion=Object.fromEntries(Object.keys(motionFields).map(k=>[k,snapshot.motion[k]]));
+  if(!validMotion(motion)){el('motionMessage').textContent='Не удалось проверить параметры базы.';return;}
+  const file={format:'elevator-esp32-motion',version:1,motion};
+  const link=document.createElement('a');
+  link.href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(file,null,2)+'\n');
+  link.download='lift-motion.json';document.body.append(link);link.click();link.remove();
+  el('motionMessage').textContent='Файл текущих параметров базы подготовлен. Несохранённые правки в него не входят.';
+};
+el('motionImport').onclick=()=>{if(!el('motionImport').disabled)el('motionFile').click();};
+el('motionFile').onchange=async()=>{
+  const input=el('motionFile'),file=input.files?.[0];input.value='';
+  if(!file||!motionAvailable()||motionImporting)return;
+  const initialToken=token,initialRevision=snapshot.motionRevision;
+  motionImporting=true;controls();
+  try{
+    if(file.size>4096)throw Error('Файл больше 4 КБ.');
+    const text=await file.text();
+    if(text.length>4096)throw Error('Файл больше 4 КБ.');
+    let data;try{data=JSON.parse(text.replace(/^\uFEFF/,''));}catch(e){throw Error('Некорректный JSON.');}
+    if(!data||data.format!=='elevator-esp32-motion'||data.version!==1||
+        Object.keys(data).length!==3||!Object.hasOwn(data,'motion'))throw Error('Неизвестный формат или версия файла.');
+    if(!validMotion(data.motion))throw Error('Недопустимые или неполные параметры движения.');
+    if(!motionAvailable()||token!==initialToken||snapshot.motionRevision!==initialRevision)
+      throw Error('Состояние базы изменилось. Повторите загрузку после обновления данных.');
+    fillMotion(data.motion,initialRevision);motionDirty=true;
+    el('motionMessage').textContent='Параметры из файла загружены в поля. Проверьте их и нажмите «Сохранить параметры».';
+  }catch(e){el('motionMessage').textContent='Файл не загружен: '+e.message;}
+  finally{motionImporting=false;controls();}
+};
 function fillMotion(values,revision){for(const [key,id] of Object.entries(motionFields))el(id).value=String(values[key]);motionFormRevision=revision;}
 function syncMotion(s,requestAtStart,acknowledgedAtStart){
   if(!s.motion)return;
@@ -60,7 +102,7 @@ el('motionDefaults').onclick=()=>{if(el('motionDefaults').disabled)return;fillMo
 el('motionSave').onclick=async()=>{
   if(el('motionSave').disabled)return;
   const values={};for(const [key,id] of Object.entries(motionFields)){const text=el(id).value;values[key]=/^\d+$/.test(text)?Number(text):NaN;}
-  if(Object.entries(values).some(([k,v])=>!Number.isInteger(v)||v<(k==='acceleration'?100:200)||v>(k==='acceleration'?1800:2000))||values.minimum>values.maximum){el('motionMessage').textContent='Проверьте диапазоны: скорости 200–2000, ускорение 100–1800, минимум ≤ максимум.';return;}
+  if(!validMotion(values)){el('motionMessage').textContent='Проверьте диапазоны: скорости 200–2000, ускорение 100–1800, минимум ≤ максимум.';return;}
   motionPending={values,revision:motionFormRevision,started:Date.now(),acknowledged:false};
   el('motionMessage').textContent='Отправка параметров…';controls();
   try{
@@ -77,10 +119,12 @@ function controls(){
   el('save').disabled=!mine||!session||!snapshot.calibCanSave||heldDown||commandBusy;
   el('reset').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
   el('stop').disabled=!token;
-  const editable=live&&!!snapshot.motion&&snapshot.stationary&&!snapshot.calibOwner&&!session&&!motionPending&&snapshot.networkResult!==1;
+  const editable=motionAvailable()&&!motionImporting;
   for(const id of Object.values(motionFields))el(id).disabled=!editable;
   el('motionSave').disabled=!editable||!motionFormRevision;el('motionDefaults').disabled=!editable;
-  el('motionReload').disabled=!live||!snapshot.motion||!!motionPending;
+  el('motionReload').disabled=!live||!snapshot.motion||!!motionPending||motionImporting;
+  el('motionImport').disabled=!editable;
+  el('motionExport').disabled=!live||!snapshot.motion||!!motionPending||motionImporting;
   el('network').disabled=!live||!snapshot.stationary||!!snapshot.calibOwner||snapshot.networkResult===1||session;
 }
 async function sendAction(action){
