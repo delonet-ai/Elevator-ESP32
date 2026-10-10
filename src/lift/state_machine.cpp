@@ -7,6 +7,7 @@
 #include "calibration_manager.h"
 #include "config.h"
 #include "motion_settings.h"
+#include "event_journal.h"
 #include "log.h"
 
 namespace {
@@ -40,9 +41,15 @@ bool g_calibDescending = false;
 // отказом: периферии нужно время, чтобы подхватить команду.
 const unsigned long MOTION_SETTLE_MS = 250;
 
+void setState(LiftState state) {
+  if (g_state != state) journalRecord(EventKind::State, state);
+  g_state = state;
+}
+
 void enterError(LiftError code, const char *why) {
   motorStopHard();
-  g_state           = STATE_ERROR;
+  journalRecord(EventKind::Error, code);
+  setState(STATE_ERROR);
   g_error           = code;
   g_manualDir       = 0;
   g_calibDescending = false;
@@ -52,7 +59,7 @@ void enterError(LiftError code, const char *why) {
 }
 
 void enterIdle() {
-  g_state           = STATE_IDLE;
+  setState(STATE_IDLE);
   g_manualDir       = 0;
   g_calibDescending = false;
   g_targetFloor  = 0;
@@ -64,11 +71,11 @@ void enterReadyState() {
   g_manualDir       = 0;
   g_calibDescending = false;
   if (!calibIsValid()) {
-    g_state = STATE_NEED_CALIB;
+    setState(STATE_NEED_CALIB);
   } else if (!g_positionKnown) {
-    g_state = STATE_NEED_HOMING;
+    setState(STATE_NEED_HOMING);
   } else {
-    g_state = STATE_IDLE;
+    setState(STATE_IDLE);
   }
   g_targetFloor  = 0;
   g_holdDeadline = 0;
@@ -85,7 +92,7 @@ void handleTopSwitch() {
   switch (g_state) {
     case STATE_CALIB_HOMING_UP:
       calibMarkTop();  // сама останавливает привод и ждёт останова
-      g_state        = STATE_CALIB_MOVING_DOWN;
+      setState(STATE_CALIB_MOVING_DOWN);
       g_holdDeadline = 0;
       LOG_I("[SM] Calibration: top reached, waiting for DOWN");
       break;
@@ -144,12 +151,13 @@ void holdRefresh() {
 // ---------------------------------------------------------------- init/tick
 
 void smInit() {
+  journalRecord(EventKind::Boot, 0);
   g_error         = ERR_NONE;
   g_targetFloor   = 0;
   g_positionKnown = false;
 
   if (!calibIsValid()) {
-    g_state = STATE_NEED_CALIB;
+    setState(STATE_NEED_CALIB);
     LOG_I("[SM] No calibration -> NEED_CALIB");
     return;
   }
@@ -159,10 +167,10 @@ void smInit() {
   if (ioTopSwitchActive()) {
     motorSetPosition(floorGetTopSwitchPosition());
     g_positionKnown = true;
-    g_state         = STATE_IDLE;
+    setState(STATE_IDLE);
     LOG_I("[SM] Calibration OK, cabin at top switch -> IDLE");
   } else {
-    g_state = STATE_NEED_HOMING;
+    setState(STATE_NEED_HOMING);
     LOG_I("[SM] Calibration OK, position unknown -> NEED_HOMING");
   }
 }
@@ -290,6 +298,7 @@ void smCommandMoveToFloor(uint8_t floor) {
   if (!g_positionKnown) {
     // Ехать «на этаж», не зная, где кабина, — верный способ въехать в упор.
     LOG_W("[SM] Floor call ignored: position unknown, homing required");
+    if (g_error != ERR_NO_HOME) journalRecord(EventKind::Error, ERR_NO_HOME);
     g_error = ERR_NO_HOME;
     return;
   }
@@ -310,7 +319,7 @@ void smCommandMoveToFloor(uint8_t floor) {
   g_error         = ERR_NONE;
   g_targetFloor   = floor;
   g_targetPos     = dest;
-  g_state         = STATE_MOVING;
+  setState(STATE_MOVING);
   g_motionStartMs = millis();
   g_holdDeadline  = 0;
 
@@ -326,6 +335,7 @@ void smCommandMoveToFloor(uint8_t floor) {
 }
 
 void smCommandStop() {
+  journalRecord(EventKind::Stop, 0);
   const bool browserOwned = webCalibrationBlocksCommands();
   webCalibrationExternalStop();
   // Экстренный стоп обязан работать в любом состоянии, включая калибровку.
@@ -341,9 +351,9 @@ void smCommandStop() {
     g_positionKnown = false;
     enterReadyState();
   } else if (g_state == STATE_CALIB_HOMING_UP) {
-    g_state = STATE_NEED_CALIB;
+    setState(STATE_NEED_CALIB);
   } else if (browserOwned && g_state == STATE_CALIB_MOVING_DOWN) {
-    g_state = STATE_NEED_CALIB;
+    setState(STATE_NEED_CALIB);
   }
   // Для пульта спуск можно продолжить; веб-сессия после STOP отзывается.
   LOG_I("[SM] STOP");
@@ -351,7 +361,7 @@ void smCommandStop() {
 
 void smCommandAbortCalib() {
   smCommandStop();
-  if (g_state == STATE_CALIB_MOVING_DOWN) g_state = STATE_NEED_CALIB;
+  if (g_state == STATE_CALIB_MOVING_DOWN) setState(STATE_NEED_CALIB);
 }
 
 void smCommandStartCalib() {
@@ -365,7 +375,7 @@ void smCommandStartCalib() {
   g_error         = ERR_NONE;
   g_positionKnown = false;
   g_targetFloor   = 0;
-  g_state           = STATE_CALIB_HOMING_UP;
+  setState(STATE_CALIB_HOMING_UP);
   g_calibDescending = false;
   g_motionStartMs   = millis();
   if (ioTopSwitchActive()) {
@@ -435,7 +445,7 @@ void smCommandManualUpHold() {
   }
 
   if (g_state != STATE_MANUAL_MOVE || g_manualDir != 1) {
-    g_state         = STATE_MANUAL_MOVE;
+    setState(STATE_MANUAL_MOVE);
     g_manualDir     = 1;
     g_targetFloor   = 0;
     g_motionStartMs = millis();
@@ -461,7 +471,7 @@ void smCommandManualDownHold() {
   }
 
   if (g_state != STATE_MANUAL_MOVE || g_manualDir != -1) {
-    g_state         = STATE_MANUAL_MOVE;
+    setState(STATE_MANUAL_MOVE);
     g_manualDir     = -1;
     g_targetFloor   = 0;
     g_motionStartMs = millis();
@@ -500,7 +510,7 @@ void smCommandStartHoming() {
 
   g_error         = ERR_NONE;
   g_targetFloor   = 0;
-  g_state         = STATE_HOMING;
+  setState(STATE_HOMING);
   g_motionStartMs = millis();
   motorRunUp(motionSettings().homing);
   LOG_I("[SM] Homing up to top switch");
@@ -509,6 +519,7 @@ void smCommandStartHoming() {
 void smCommandClearError() {
   if (webMotionLocked()) return;
   if (g_state != STATE_ERROR) return;
+  journalRecord(EventKind::Error, ERR_NONE);
   g_error = ERR_NONE;
   // После любой ошибки позиция считается недостоверной.
   g_positionKnown = false;
@@ -528,7 +539,7 @@ void smForceNeedCalib() {
   g_targetFloor   = 0;
   g_positionKnown = false;
   g_holdDeadline  = 0;
-  g_state         = STATE_NEED_CALIB;
+  setState(STATE_NEED_CALIB);
   LOG_I("[SM] Forced NEED_CALIB");
 }
 

@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "web_control_policy.h"
 #include "motion_settings.h"
+#include "event_journal.h"
 
 // Immutable copies cross from the control loop into the HTTP task. Never
 // call the state machine, motor or Preferences from an HTTP callback.
@@ -18,6 +19,7 @@ struct WebSnapshot {
   MotionSettings motion;
   uint32_t motionRevision;
   uint8_t motionStorage;
+  JournalSnapshot journal;
 };
 
 bool dashboardInit(const char *password);

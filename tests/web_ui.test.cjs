@@ -7,18 +7,19 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/lift/web_page.h'), 'utf8');
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-async function load(fetch) {
+async function load(fetch,fetchEvents=async()=>({ok:true,json:async()=>({boot:'test',age:0,overwritten:0,events:[]})})) {
   const nodes = {};
   const events = {};
   const downloads=[];
   function node(tag) { return {textContent:'', children:[], click(){if(tag==='a')downloads.push({href:this.href,download:this.download});},remove(){},setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
-  const context = vm.createContext({fetch, AbortSignal, URLSearchParams, Uint32Array,
+  const context = vm.createContext({fetch:(url,options)=>url==='/api/events'?fetchEvents(url,options):fetch(url,options), AbortSignal, URLSearchParams, Uint32Array,
     crypto:{getRandomValues:a=>{a[0]=42;return a;}}, confirm:()=>true, setTimeout:()=>{}, clearTimeout:()=>{},
     window:{addEventListener:(name,fn)=>events[name]=fn},
     document:{body:node(),addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
   vm.runInContext(script, context);
   await new Promise(resolve=>setImmediate(resolve));
   nodes.refresh = () => vm.runInContext('update()', context);
+  nodes.refreshEvents = () => vm.runInContext('updateEvents()', context);
   nodes.event = name => events[name]();
   nodes.downloads=downloads;
   nodes.importFile=async(text,size=Buffer.byteLength(text))=>{
@@ -32,6 +33,45 @@ const defaultMotion={minimum:200,maximum:2000,manual:400,homing:400,down:1200,ac
 function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationary:true,calibOwner:0,motion:{...defaultMotion},motionRevision:1,motionStorage:0,motionResult:0,...extra}; }
 
 const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
+
+test('journal renders newest first, uses protocol error codes, and exports no credentials',async()=>{
+  const data={boot:'boot-log',age:10,overwritten:5,token:'secret',events:[
+    {id:1,uptime:500,kind:0,value:0,position:0},
+    {id:2,uptime:1000,kind:2,value:1,position:-25},
+    {id:3,uptime:1100,kind:2,value:3,position:-30},
+    {id:4,uptime:1200,kind:3,value:0,position:-30}]};
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}),async()=>({ok:true,json:async()=>data}));
+  assert.match(nodes.eventsList.children[0].textContent,/STOP/);
+  assert.match(nodes.eventsList.children[1].textContent,/Таймаут калибровки/);
+  assert.match(nodes.eventsList.children[2].textContent,/Таймаут движения/);
+  assert.match(nodes.eventsMessage.textContent,/5/);
+  nodes.eventsExport.onclick();const downloaded=JSON.parse(decodeURIComponent(nodes.downloads[0].href.split(',')[1]));
+  assert.equal(nodes.downloads[0].download,'lift-events.json');
+  assert.equal(downloaded.events.length,4);assert.equal(downloaded.boot,'boot-log');
+  assert.equal(downloaded.token,undefined);assert.equal(downloaded.events[0].id,1);
+});
+
+test('journal reboot replaces history and stale or unauthorized responses block export only',async()=>{
+  let data={boot:'first',age:0,overwritten:0,events:[{id:1,uptime:1,kind:3,value:0,position:0}]},ok=true;
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}),async()=>({ok,json:async()=>data}));
+  data={boot:'second',age:0,overwritten:0,events:[]};await nodes.refreshEvents();
+  assert.equal(nodes.eventsList.children.length,0);assert.match(nodes.eventsMessage.textContent,/перезапущена/);
+  data={...data,age:1001};await nodes.refreshEvents();
+  assert.equal(nodes.eventsExport.disabled,true);assert.match(nodes.eventsMessage.textContent,/устаревшими/);
+  assert.equal(nodes.motionSave.disabled,false);
+  data={...data,age:0};ok=false;await nodes.refreshEvents();
+  nodes.eventsExport.onclick();assert.equal(nodes.downloads.length,0);
+});
+
+test('journal rejects malformed or oversized snapshots without disrupting telemetry',async()=>{
+  let data={boot:'first',age:0,overwritten:0,events:[{id:1,uptime:1,kind:2,value:7,position:0}]};
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}),async()=>({ok:true,json:async()=>data}));
+  for(const events of [[{id:1,uptime:1,kind:2,value:'<script>',position:0}],Array(33).fill(data.events[0]),[null]]){
+    data={...data,events};await nodes.refreshEvents();assert.equal(nodes.eventsExport.disabled,true);
+    assert.match(nodes.eventsList.children[0].textContent,/Ошибка памяти/);
+    assert.equal(nodes.motionSave.disabled,false);
+  }
+});
 
 test('backup exports active base parameters without unsaved edits or credentials',async()=>{
   let posts=0;

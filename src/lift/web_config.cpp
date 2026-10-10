@@ -93,12 +93,21 @@ void webInit() {
 }
 
 void webUpdate() {
+  static bool observed = false, lastRunning = false, lastTop = false;
+  static uint8_t lastCalibration = 0;
+  const bool running = motorIsRunning(), top = ioTopSwitchActive();
+  const uint8_t calibration = webCalibrationResult();
+  if (!observed || running != lastRunning) journalRecord(EventKind::Motor, running);
+  if (!observed || top != lastTop) journalRecord(EventKind::Top, top);
+  if (calibration != lastCalibration) journalRecord(EventKind::Calibration, calibration);
+  observed = true; lastRunning = running; lastTop = top; lastCalibration = calibration;
   if (!initialized) return;
   const unsigned long now = millis();
   static unsigned long lastSnapshot = 0;
   if (now - lastSnapshot >= 100) {
     lastSnapshot = now;
     WebSnapshot snapshot = {};
+    snapshot.journal = journalSnapshot();
     snapshot.motion = motionSettings();
     snapshot.motionRevision = motionRevision();
     snapshot.motionStorage = motionStorageStatus();
@@ -145,6 +154,7 @@ void webUpdate() {
       motorSetSpeedLimit(motionSettings().minimum +
         (motionSettings().maximum - motionSettings().minimum) * (ioSpeedPercent() / 100.0f));
     }
+    journalRecord(EventKind::MotionSettings, result);
     dashboardMotionResult(result);
   }
   // Provisioning may block; the dashboard itself runs in the HTTP task.

@@ -29,13 +29,58 @@ input[hidden]{display:none}
 <p class="muted">Файл содержит только скорости и ускорение. Загрузка заполняет поля для проверки; примените их кнопкой «Сохранить параметры».</p>
 <p id="motionMessage"></p><p id="motionStorage" class="muted"></p><p class="muted">Сохранение доступно только после остановки и вне калибровки. Подстановка исходных значений требует сохранения. Настройки не запускают мотор.</p></section>
 <section><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
-<button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section></main>
+<button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section>
+<section><h2>Журнал событий</h2><p class="muted">Последние 32 события с момента включения. Время — от запуска базы, позиция — в шагах. После перезапуска журнал очищается.</p>
+<p id="eventsMessage">Ожидание журнала…</p><button id="eventsExport" class="secondary" disabled>Скачать журнал</button><ol id="eventsList"></ol></section></main>
 <script>
 const states=['Запуск','Нужна калибровка','Калибровка вверх','Калибровка вниз','Ожидание','Поездка','Ручное движение','Ошибка','Нужно найти верх','Поиск верха'];
 const results=['','Поиск верхней точки запущен','Спуск приостановлен','Калибровка сохранена','Калибровка сброшена','Остановлено: потеря связи с браузером','Команда отклонена: проверьте состояние','Остановлено командой STOP','Ошибка контроллера — калибровка прервана'];
 const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
+let eventSnapshot=null;
+const errorNames=['Нет ошибки','Таймаут движения','Верхний концевик','Таймаут калибровки','Недостаточный ход','Программный предел','Позиция не определена','Ошибка памяти'];
+function eventText(e){
+  const value=e.value;
+  switch(e.kind){
+    case 0:return 'Запуск базы';
+    case 1:return 'Состояние: '+(states[value]??value);
+    case 2:return 'Ошибка '+value+': '+(errorNames[value]??'Неизвестный код');
+    case 3:return 'Команда STOP';
+    case 4:return value?'Мотор движется':'Мотор остановлен';
+    case 5:return value?'Верхний концевик нажат':'Верхний концевик свободен';
+    case 6:return 'Веб-калибровка: '+(results[value]??value);
+    case 7:return 'Параметры движения: '+({2:'сохранены',3:'запрос отклонён',4:'ошибка записи'}[value]??value);
+    default:return 'Событие '+e.kind+': '+value;
+  }
+}
+async function updateEvents(){
+  try{
+    const r=await fetch('/api/events',{cache:'no-store',signal:AbortSignal.timeout(1200)});
+    if(!r.ok)throw Error();const s=await r.json();
+    if(typeof s.boot!=='string'||!Number.isInteger(s.age)||s.age<0||s.age>1000||
+      !Number.isInteger(s.overwritten)||s.overwritten<0||!Array.isArray(s.events)||s.events.length>32||
+      s.events.some(e=>!e||!['id','uptime','kind','value','position'].every(k=>Number.isInteger(e[k]))))throw Error();
+    const restarted=eventSnapshot&&eventSnapshot.boot!==s.boot;
+    eventSnapshot={boot:s.boot,overwritten:s.overwritten,events:s.events.map(e=>({id:e.id,uptime:e.uptime,kind:e.kind,value:e.value,position:e.position}))};
+    const list=el('eventsList');list.replaceChildren();
+    for(const e of [...s.events].reverse()){
+      const item=document.createElement('li');
+      item.textContent=(e.uptime/1000).toFixed(1)+' с · '+eventText(e)+' · позиция '+e.position;
+      list.append(item);
+    }
+    el('eventsMessage').textContent=(restarted?'База перезапущена. ':'')+
+      (s.events.length?'Журнал обновлён.':'Событий пока нет.')+(s.overwritten?' Вытеснено старых событий: '+s.overwritten+'.':'');
+    el('eventsExport').disabled=false;
+  }catch(e){el('eventsMessage').textContent='Журнал не обновлён: показанные события могут быть устаревшими.';el('eventsExport').disabled=true;}
+  setTimeout(updateEvents,2000);
+}
+el('eventsExport').onclick=()=>{
+  if(el('eventsExport').disabled||!eventSnapshot)return;
+  const link=document.createElement('a');
+  link.href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify({format:'elevator-esp32-events',version:1,...eventSnapshot},null,2)+'\n');
+  link.download='lift-events.json';document.body.append(link);link.click();link.remove();
+};
 const motionFields={minimum:'minimum',maximum:'maximum',manual:'manual',homing:'homing',down:'calibDown',acceleration:'acceleration'};
 let motionDirty=false,motionFormRevision=0,motionPending=null,motionBootToken='',motionImporting=false;
 function validMotion(values){
@@ -187,5 +232,5 @@ window.addEventListener('blur',()=>{if(session)stopSession();});
 window.addEventListener('pagehide',()=>{if(session)stopSession();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&session)stopSession();});
 el('network').onclick=async()=>{if(!token||el('network').disabled||!confirm('Перейти в режим настройки сети?'))return;try{const r=await fetch('/api/network',{method:'POST',headers:{'X-Lift-Token':token}});el('message').textContent=await r.text();if(r.ok)el('network').disabled=true}catch(e){el('message').textContent='Проверьте наличие точки Lift-Setup'}};
-controls();update();
+controls();update();updateEvents();
 </script></html>)HTML";

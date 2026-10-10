@@ -8,6 +8,7 @@
 namespace {
 AsyncWebServer server(80);
 String password, token;
+String journalBoot;
 portMUX_TYPE snapshotMux = portMUX_INITIALIZER_UNLOCKED;
 WebSnapshot latest = {};
 bool accepting = false;
@@ -56,6 +57,7 @@ bool authorize(AsyncWebServerRequest *request) {
 bool dashboardInit(const char *accessPassword) {
   password = accessPassword;
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
+  journalBoot = String(esp_random(), HEX) + String(esp_random(), HEX);
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
   motionQueue = xQueueCreate(1, sizeof(MotionRequest));
@@ -96,6 +98,27 @@ bool dashboardInit(const char *accessPassword) {
       (unsigned long)s.motion.homing, (unsigned long)s.motion.down, (unsigned long)s.motion.acceleration);
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+  });
+  server.on("/api/events", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!authorize(request)) return;
+    JournalSnapshot journal;
+    uint32_t capturedAt;
+    portENTER_CRITICAL(&snapshotMux);
+    journal = latest.journal;
+    capturedAt = latest.uptime;
+    portEXIT_CRITICAL(&snapshotMux);
+    auto *response = request->beginResponseStream("application/json");
+    response->addHeader("Cache-Control", "no-store");
+    response->printf("{\"boot\":\"%s\",\"age\":%lu,\"overwritten\":%lu,\"events\":[",
+      journalBoot.c_str(), (unsigned long)(millis()-capturedAt), (unsigned long)journal.overwritten);
+    for (uint8_t i = 0; i < journal.count; ++i) {
+      const auto &event = journal.entries[i];
+      response->printf("%s{\"id\":%lu,\"uptime\":%lu,\"kind\":%u,\"value\":%lu,\"position\":%ld}",
+        i ? "," : "", (unsigned long)event.id, (unsigned long)event.uptime, event.kind,
+        (unsigned long)event.value, (long)event.position);
+    }
+    response->print("]}");
     request->send(response);
   });
   server.on("/api/network", HTTP_POST, [](AsyncWebServerRequest *request) {
