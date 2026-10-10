@@ -1,0 +1,68 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  web-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test embedded web interface
+        run: node --test tests/*.test.cjs
+      - name: Test calibration ownership and timeouts
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror tests/web_control_policy_test.cpp -o /tmp/web-policy-test
+          /tmp/web-policy-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/web_calibration_runtime_test.cpp -o /tmp/web-runtime-test
+          /tmp/web-runtime-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/calibration_storage_test.cpp -o /tmp/calibration-storage-test
+          /tmp/calibration-storage-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/motion_settings_test.cpp -o /tmp/motion-settings-test
+          /tmp/motion-settings-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/sound_engine_test.cpp -o /tmp/sound-engine-test
+          /tmp/sound-engine-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/sound_manager_test.cpp -o /tmp/sound-manager-test
+          /tmp/sound-manager-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/event_journal_test.cpp -o /tmp/event-journal-test
+          /tmp/event-journal-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/state_journal_test.cpp -o /tmp/state-journal-test
+          /tmp/state-journal-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/remote_presence_test.cpp -o /tmp/remote-presence-test
+          /tmp/remote-presence-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Wno-unused-parameter -I tests/radio_stubs -I tests/stubs -I src/common tests/base_radio_test.cpp -o /tmp/base-radio-test
+          /tmp/base-radio-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Wno-unused-parameter -I tests/radio_stubs -I tests/stubs -I src/common tests/remote_radio_test.cpp -o /tmp/remote-radio-test
+          /tmp/remote-radio-test
+
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [lift, remote, lift_bench]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: pio-${{ matrix.environment }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.environment }}
+        run: pio run -e ${{ matrix.environment }}
