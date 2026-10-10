@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-enum class WebAction : uint8_t { Start, Heartbeat, Down, Pause, Save, Reset };
+enum class WebAction : uint8_t { Start, Heartbeat, Down, Pause, Save, Reset, Home, Clear };
 struct WebCommand {
   WebAction action;
   uint32_t owner, generation, sequence, receivedAt;

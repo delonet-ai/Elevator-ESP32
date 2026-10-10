@@ -7,18 +7,23 @@ const char PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="ru"><meta charset=
 body{font:16px system-ui;background:#101826;color:#edf3ff;margin:0;padding:24px}main{max-width:760px;margin:auto}h1{margin-bottom:8px}.muted{color:#aabbd4}section{background:#1c293c;border-radius:16px;padding:24px;margin:20px 0}dl{display:grid;grid-template-columns:1fr 1fr;gap:14px}dd{margin:0;text-align:right}button:disabled{opacity:.45;cursor:default}button{background:#73d5b6;color:#10251f;border:0;border-radius:8px;padding:14px;font:inherit;cursor:pointer}.buttons{display:flex;flex-wrap:wrap;gap:10px}.stop{background:#ff8585}.secondary{background:#b2c5df}#down{touch-action:none;user-select:none}a{color:#73d5b6}
 label{display:block;margin:12px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font:inherit;border-radius:6px;border:1px solid #789;background:#101826;color:#edf3ff}
 input[hidden]{display:none}
+.controlbar{position:sticky;top:0;z-index:10;background:#101826;padding:10px 0;border-bottom:1px solid #43536b;display:flex;align-items:center;flex-wrap:wrap;gap:10px}.controlbar p{flex:1;margin:0;min-width:150px}nav{display:flex;flex-wrap:wrap;gap:16px;padding:16px 0}section{scroll-margin-top:130px}#eventsList{max-height:360px;overflow:auto;padding-left:24px}#eventsList li{margin:10px 0}dd{overflow-wrap:anywhere}@media(max-width:480px){body{padding:12px}section{padding:16px}dl{gap:10px;font-size:14px}}
+
 </style>
-<main><p class="muted">ELEVATOR ESP32</p><h1>Состояние лифта</h1><p id="connection">Подключение…</p>
-<section><dl id="values"></dl></section>
-<section><h2>Калибровка</h2><p>1. Найдите верхний концевик. 2. Удерживайте спуск до нижней точки. 3. Отпустите кнопку, дождитесь остановки и сохраните низ.</p>
+<main><p class="muted">ELEVATOR ESP32</p><h1>Управление лифтом</h1><div class="controlbar"><p id="connection" role="status">Подключение…</p><button id="stop" class="stop" disabled>СТОП</button></div>
+<nav aria-label="Разделы"><a href="#statusSection">Состояние</a><a href="#calibSection">Калибровка</a><a href="#motionSection">Скорости</a><a href="#networkSection">Wi-Fi</a><a href="#eventsSection">Журнал</a></nav>
+<section id="statusSection"><h2>Состояние</h2><dl id="values"></dl><p id="errorHelp" role="status"></p>
+<div class="buttons"><button id="home" disabled>Восстановить позицию по верху</button><button id="clear" class="secondary" disabled>Сбросить ошибку</button></div>
+<p class="muted">Восстановление позиции поднимает кабину до концевика без стирания калибровки. Сброс ошибки сам по себе не запускает движение.</p></section>
+<section id="calibSection"><h2>Калибровка</h2><p>1. Найдите верхний концевик. 2. Удерживайте спуск до нижней точки. 3. Отпустите кнопку, дождитесь остановки и сохраните низ.</p>
 <p id="calibState">Ожидание данных</p><div class="buttons">
 <button id="start" disabled>Найти верх</button><button id="down" disabled>Удерживать: вниз</button>
-<button id="save" disabled>Сохранить низ</button><button id="stop" class="stop" disabled>СТОП</button>
+<button id="save" disabled>Сохранить низ</button>
 <button id="reset" class="secondary" disabled>Сбросить калибровку</button></div>
 <p id="calibMessage"></p><p class="muted">При уходе со страницы или потере связи веб-калибровка останавливается. Веб-СТОП не заменяет физическую аварийную кнопку. Удерживающий момент мотора сохраняется.</p></section>
-<section><h2>Движение</h2><p>Скорости в шагах/с, ускорение в шагах/с². Регулятор на базе выбирает скорость поездки между минимумом и максимумом. Ручной ход и калибровка используют отдельные скорости.</p>
-<label>Минимум поездки<input id="minimum" type="number" min="200" max="2000" step="1" disabled></label>
-<label>Максимум поездки<input id="maximum" type="number" min="200" max="2000" step="1" disabled></label>
+<section id="motionSection"><h2>Движение</h2><p>Скорости в шагах/с, ускорение в шагах/с². Регулятор на базе выбирает скорость поездки между минимумом и максимумом. Ручной ход и калибровка используют отдельные скорости.</p><p class="muted">Пределы крутилки: 50–10 000 шагов/с. Исходный диапазон — 200–2000. Допустимая для механики скорость определяется при проверке.</p>
+<label>Крутилка: скорость в минимальном положении<input id="minimum" type="number" min="50" max="10000" step="1" disabled></label>
+<label>Крутилка: скорость в максимальном положении<input id="maximum" type="number" min="50" max="10000" step="1" disabled></label>
 <label>Ручной ход<input id="manual" type="number" min="200" max="2000" step="1" disabled></label>
 <label>Поиск верхнего концевика<input id="homing" type="number" min="200" max="2000" step="1" disabled></label>
 <label>Спуск при калибровке<input id="calibDown" type="number" min="200" max="2000" step="1" disabled></label>
@@ -28,13 +33,13 @@ input[hidden]{display:none}
 <input id="motionFile" type="file" accept=".json,application/json" hidden>
 <p class="muted">Файл содержит только скорости и ускорение. Загрузка заполняет поля для проверки; примените их кнопкой «Сохранить параметры».</p>
 <p id="motionMessage"></p><p id="motionStorage" class="muted"></p><p class="muted">Сохранение доступно только после остановки и вне калибровки. Подстановка исходных значений требует сохранения. Настройки не запускают мотор.</p></section>
-<section><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
+<section id="networkSection"><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
 <button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section>
-<section><h2>Журнал событий</h2><p class="muted">Последние 32 события с момента включения. Время — от запуска базы, позиция — в шагах. После перезапуска журнал очищается.</p>
+<section id="eventsSection"><h2>Журнал событий</h2><p class="muted">Последние 32 события с момента включения. Время — от запуска базы, позиция — в шагах. После перезапуска журнал очищается.</p>
 <p id="eventsMessage">Ожидание журнала…</p><button id="eventsExport" class="secondary" disabled>Скачать журнал</button><ol id="eventsList"></ol></section></main>
 <script>
 const states=['Запуск','Нужна калибровка','Калибровка вверх','Калибровка вниз','Ожидание','Поездка','Ручное движение','Ошибка','Нужно найти верх','Поиск верха'];
-const results=['','Поиск верхней точки запущен','Спуск приостановлен','Калибровка сохранена','Калибровка сброшена','Остановлено: потеря связи с браузером','Команда отклонена: проверьте состояние','Остановлено командой STOP','Ошибка контроллера — калибровка прервана'];
+const results=['','Поиск верхней точки запущен','Спуск приостановлен','Калибровка сохранена','Калибровка сброшена','Остановлено: потеря связи с браузером','Команда отклонена: проверьте состояние','Остановлено командой STOP','Ошибка контроллера — сессия прервана','Позиция восстановлена по верхнему концевику','Ошибка сброшена'];
 const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
@@ -88,7 +93,7 @@ function validMotion(values){
   return !!values&&typeof values==='object'&&!Array.isArray(values)&&
     Object.keys(values).length===Object.keys(motionFields).length&&
     Object.keys(motionFields).every(k=>Object.hasOwn(values,k)&&Number.isInteger(values[k])&&
-      values[k]>=(k==='acceleration'?100:200)&&values[k]<=(k==='acceleration'?1800:2000))&&values.minimum<=values.maximum;
+      values[k]>=(k==='acceleration'?100:k==='minimum'||k==='maximum'?50:200)&&values[k]<=(k==='acceleration'?1800:k==='minimum'||k==='maximum'?10000:2000))&&values.minimum<=values.maximum;
 }
 function motionAvailable(){return !!token&&!!snapshot?.motion&&snapshot.stationary&&!snapshot.calibOwner&&!session&&!motionPending&&snapshot.networkResult!==1;}
 el('motionExport').onclick=()=>{
@@ -148,7 +153,7 @@ el('motionDefaults').onclick=()=>{if(el('motionDefaults').disabled)return;fillMo
 el('motionSave').onclick=async()=>{
   if(el('motionSave').disabled)return;
   const values={};for(const [key,id] of Object.entries(motionFields)){const text=el(id).value;values[key]=/^\d+$/.test(text)?Number(text):NaN;}
-  if(!validMotion(values)){el('motionMessage').textContent='Проверьте диапазоны: скорости 200–2000, ускорение 100–1800, минимум ≤ максимум.';return;}
+  if(!validMotion(values)){el('motionMessage').textContent='Проверьте диапазоны: крутилка 50–10000, ручной ход и калибровка 200–2000, ускорение 100–1800, минимум ≤ максимум.';return;}
   motionPending={values,revision:motionFormRevision,started:Date.now(),acknowledged:false};
   el('motionMessage').textContent='Отправка параметров…';controls();
   try{
@@ -165,6 +170,8 @@ function controls(){
   el('save').disabled=!mine||!session||!snapshot.calibCanSave||heldDown||commandBusy;
   el('reset').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
   el('stop').disabled=!token;
+  el('home').disabled=!live||!snapshot.stationary||snapshot.state!==8||!!snapshot.calibOwner||session||commandBusy;
+  el('clear').disabled=!live||!snapshot.stationary||snapshot.state!==7||!!snapshot.calibOwner||session||commandBusy;
   const editable=motionAvailable()&&!motionImporting;
   for(const id of Object.values(motionFields))el(id).disabled=!editable;
   el('motionSave').disabled=!editable||!motionFormRevision;el('motionDefaults').disabled=!editable;
@@ -203,9 +210,10 @@ async function update(){
     }
     if(s.networkResult===2)el('message').textContent='Смена сети отменена: лифт начал движение или запрос устарел';
     el('connection').textContent='База доступна · '+s.ip;
+    el('errorHelp').textContent=s.error?'Устраните причину ошибки перед сбросом. При неизвестной позиции потребуется восстановление по верхнему концевику.':s.state===8?'Калибровка сохранена, но после запуска положение кабины нужно восстановить.':'';
     const phase=s.calibOwner&&s.state===2?'Подъём до верхнего концевика':s.calibOwner&&s.state===3?(s.running?'Спуск. Отпустите кнопку для остановки':'Верх найден. Удерживайте вниз или сохраните нижнюю точку'):(results[s.calibResult]||states[s.state]);
     el('calibState').textContent=(s.calibOwner&&s.calibOwner!==owner?'Управляет другая вкладка. ':'')+phase;
-    const rows=[['Состояние',states[s.state]||s.state],['Этаж / цель',s.floor+' / '+s.target],['Позиция, шагов',s.position],['Позиция известна',s.known?'Да':'Нет'],['Ошибка',s.error],['Верхний концевик',s.top?'Нажат':'Свободен'],['Регулятор скорости',s.speed+'%'],['Пульт зарегистрирован',s.peer?'Да':'Нет'],['Радиоканал',s.channel],['Время работы, с',Math.floor(s.uptime/1000)],['Мотор',s.running?'Движется':'Остановлен'],['Ход, шагов',s.travel],['Свободная память, КБ',Math.round(s.freeHeap/1024)],['Сигнал Wi-Fi',s.rssi+' dBm'],['Пакеты от пульта',s.remoteOnline?'Приходят':s.remoteSeen?'Нет свежих пакетов':'Ещё не получены'],['Последний пакет пульта',s.remoteSeen?(s.remoteAgeMs/1000).toFixed(1)+' с назад':'—']];
+    const rows=[['Состояние',states[s.state]||s.state],['Этаж / цель',s.floor+' / '+s.target],['Позиция, шагов',s.position],['Позиция известна',s.known?'Да':'Нет'],['Ошибка',s.error?(errorNames[s.error]??'Неизвестная ошибка')+' (код '+s.error+')':'Нет'],['Верхний концевик',s.top?'Нажат':'Свободен'],['Регулятор скорости',s.speed+'%'],['Пульт зарегистрирован',s.peer?'Да':'Нет'],['Радиоканал',s.channel],['Время работы, с',Math.floor(s.uptime/1000)],['Мотор',s.running?'Движется':'Остановлен'],['Ход, шагов',s.travel],['Свободная память, КБ',Math.round(s.freeHeap/1024)],['Сигнал Wi-Fi',s.rssi+' dBm'],['Пакеты от пульта',s.remoteOnline?'Приходят':s.remoteSeen?'Нет свежих пакетов':'Ещё не получены'],['Последний пакет пульта',s.remoteSeen?(s.remoteAgeMs/1000).toFixed(1)+' с назад':'—']];
     const box=el('values');box.replaceChildren();for(const [k,v]of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;box.append(dt,dd)}
   }catch(e){if(session)stopSession();token='';el('connection').textContent='Нет обновления: данные устарели или сеть недоступна';}
   controls();setTimeout(update,session?200:1000);
@@ -214,14 +222,16 @@ async function discrete(action,prompt){
   if(commandBusy||el(action).disabled||(prompt&&!confirm(prompt)))return;
   commandBusy=true;controls();
   try{
-    if(action==='start'){generation=snapshot.calibGeneration;awaitingStart=Date.now();session=true;}
+    if(action==='start'||action==='home'){generation=snapshot.calibGeneration;awaitingStart=Date.now();session=true;}
     await sendAction(action);
     el('calibMessage').textContent='Команда передана. Результат появится в состоянии калибровки.';
-    if(action==='start')heartbeat();
+    if(action==='start'||action==='home')heartbeat();
     if(action==='save'||action==='reset')stopSession(false);
   }catch(e){el('calibMessage').textContent='Команда не подтверждена: '+e.message;stopSession();}
   finally{commandBusy=false;controls();}
 }
+el('home').onclick=()=>discrete('home','Кабина начнёт двигаться вверх до концевика. Восстановить позицию?');
+el('clear').onclick=()=>discrete('clear',null);
 el('start').onclick=()=>discrete('start','Кабина начнёт двигаться вверх до концевика. Начать?');
 el('save').onclick=()=>discrete('save',null);
 el('reset').onclick=()=>discrete('reset','Стереть сохранённую калибровку? Движение не запускается.');

@@ -18,6 +18,8 @@ long smGetPosition() { return position; }
 uint8_t smGetError() { return 0; }
 bool webMotionLocked() { return networkLocked || webCalibrationBlocksCommands(); }
 void smCommandStartCalib() { assert(!webMotionLocked()); ++starts; running=true; state=STATE_CALIB_HOMING_UP; }
+void smCommandStartHoming() { assert(!webMotionLocked()); running=true; state=STATE_HOMING; }
+void smCommandClearError() { assert(!webMotionLocked()); state=STATE_NEED_HOMING; }
 void smCommandCalibDownHold() { assert(!webMotionLocked()); ++downs; running=true; }
 void smCommandManualStop() { running=false; }
 void smCommandCalibDownSave() { assert(!webMotionLocked()); ++saves; state=STATE_IDLE; }
@@ -81,5 +83,18 @@ int main() {
   send(WebAction::Start,1);
   smCommandStop(); // external Serial / remote stop revokes ownership
   assert(!webCalibrationOwner());
+  state=STATE_NEED_HOMING;running=false;
+  send(WebAction::Home,1);assert(running && state==STATE_HOMING && webCalibrationOwner()==42);
+  send(WebAction::Heartbeat,2);assert(running);
+  state=STATE_IDLE;running=false;webCalibrationPoll();
+  assert(!webCalibrationOwner() && webCalibrationResult()==9);
+  const auto completedGeneration=webCalibrationGeneration();
+  send(WebAction::Home,1);assert(!running && webCalibrationGeneration()==completedGeneration);
+  state=STATE_NEED_HOMING;send(WebAction::Home,1);
+  clockMs+=450;webCalibrationPoll();assert(!running && !webCalibrationOwner() && webCalibrationResult()==5);
+  state=STATE_ERROR;running=false;
+  send(WebAction::Clear,1);assert(state==STATE_NEED_HOMING && webCalibrationResult()==10 && !running);
+  state=STATE_ERROR;running=true;send(WebAction::Clear,1);assert(state==STATE_ERROR);
+  running=false;networkLocked=true;send(WebAction::Clear,1);assert(state==STATE_ERROR);
   puts("Web calibration runtime: PASS");
 }

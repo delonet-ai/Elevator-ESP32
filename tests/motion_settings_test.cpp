@@ -33,4 +33,9 @@ int main() {
   auto s = motionDefaults(); s.acceleration = 1801; assert(!motionValid(s));
   s = motionDefaults(); s.homing = 199; assert(!motionValid(s));
   s = motionDefaults(); s.down = UINT32_MAX; assert(!motionValid(s));
+  s = motionDefaults(); s.minimum=50;s.maximum=10000;assert(motionValid(s));
+  r={s,motionRevision(),200};assert(motionApply(r,200,true)==2);
+  motionSettingsInit();assert(motionSettings().minimum==50 && motionSettings().maximum==10000);
+  s.minimum=49;assert(!motionValid(s));s.minimum=50;s.maximum=10001;assert(!motionValid(s));
+  s.maximum=10000;s.homing=10000;assert(!motionValid(s));
 }

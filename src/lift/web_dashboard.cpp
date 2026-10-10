@@ -190,6 +190,8 @@ bool dashboardInit(const char *accessPassword) {
     else if (action == "pause") cmd.action = WebAction::Pause;
     else if (action == "save") cmd.action = WebAction::Save;
     else if (action == "reset") cmd.action = WebAction::Reset;
+    else if (action == "home") cmd.action = WebAction::Home;
+    else if (action == "clear") cmd.action = WebAction::Clear;
     else { request->send(400, "text/plain", "Unknown action"); return; }
     cmd.receivedAt = millis();
     bool allowed;

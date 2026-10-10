@@ -34,6 +34,29 @@ function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationar
 
 const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
 
+test('expanded knob endpoints save and import while homing speed keeps its limit',async()=>{
+  const posts=[];const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>motionStatus(),text:async()=> 'Queued'};});
+  await nodes.importFile(backup({...defaultMotion,minimum:50,maximum:10000}));
+  assert.equal(nodes.minimum.value,'50');assert.equal(nodes.maximum.value,'10000');
+  await nodes.motionSave.onclick();assert.equal(posts[0].body.get('maximum'),'10000');
+});
+
+test('web homing owns a session, sends heartbeat and stops on leaving the page',async()=>{
+  const posts=[];let status=motionStatus({state:8,calibGeneration:1,calibCanStart:true});
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push({url,options});return {ok:true,json:async()=>status,text:async()=> 'Queued'};});
+  assert.equal(nodes.home.disabled,false);assert.equal(nodes.clear.disabled,true);
+  await nodes.home.onclick();assert.equal(posts[0].options.body.get('action'),'home');
+  status={...status,state:9,stationary:false,calibOwner:42};await nodes.refresh();
+  assert.equal(nodes.home.disabled,true);nodes.event('blur');assert.equal(posts.at(-1).url,'/api/stop');
+});
+
+test('clear error is a single non-motion command and errors have readable descriptions',async()=>{
+  const posts=[];const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>motionStatus({state:7,error:7,calibGeneration:1}),text:async()=> 'Queued'};});
+  assert.equal(nodes.clear.disabled,false);assert.equal(nodes.home.disabled,true);
+  assert.match(nodes.values.children[9].textContent,/Ошибка памяти/);
+  await nodes.clear.onclick();assert.equal(posts.length,1);assert.equal(posts[0].body.get('action'),'clear');
+});
+
 test('registered peer remains distinct from fresh remote traffic and its age',async()=>{
   let status=motionStatus({peer:true,remoteSeen:false,remoteOnline:false,remoteAgeMs:0});
   const nodes=await load(async()=>({ok:true,json:async()=>status}));

@@ -3,10 +3,11 @@
 // Пределы движения и настройки защит. Изменяемый профиль — в motion_settings.h.
 //
 #include <Arduino.h>
+#include "motion_settings.h"
 
 // --- Абсолютные пределы скорости (шагов/сек) ---
-static const float SPEED_MIN = 200.0f;
-static const float SPEED_MAX = 2000.0f;
+static const float SPEED_MIN = MOTION_AUTO_MIN;
+static const float SPEED_MAX = MOTION_AUTO_MAX;
 
 // --- Геометрия шахты (шаги) ---
 // Концевик стоит выше 3-го этажа; запас между ними.

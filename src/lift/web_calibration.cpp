@@ -9,8 +9,10 @@
 namespace {
 WebControlLease lease;
 bool dispatching = false;
+bool homingSession = false;
 // UI result: 0 idle, 1 started, 2 paused, 3 saved, 4 reset,
-// 5 lost browser/network, 6 rejected, 7 external stop, 8 controller error.
+// 5 lost browser/network, 6 rejected, 7 external stop, 8 controller error,
+// 9 homing completed, 10 error cleared.
 uint8_t result = 0;
 
 bool stoppedForStart() {
@@ -46,7 +48,11 @@ void webCalibrationPoll() {
     stopAndRevoke(5);
     return;
   }
-  if (lease.active() && smGetState() != STATE_CALIB_HOMING_UP && smGetState() != STATE_CALIB_MOVING_DOWN) {
+  if (lease.active() && homingSession && smGetState() == STATE_IDLE && !motorIsRunning()) {
+    lease.revoke(); result = 9; return;
+  }
+  if (lease.active() && smGetState() != STATE_CALIB_HOMING_UP && smGetState() != STATE_CALIB_MOVING_DOWN &&
+      !(homingSession && smGetState() == STATE_HOMING)) {
     stopAndRevoke(8);
     return;
   }
@@ -55,10 +61,18 @@ void webCalibrationPoll() {
   for (uint8_t i = 0; i < 4 && dashboardTakeCommand(cmd); ++i) {
     const uint32_t at = millis();
     if (!lease.fresh(cmd, at) || WiFi.status() != WL_CONNECTED) continue;
-    if (cmd.action == WebAction::Start) {
-      if (webMotionLocked() || !stoppedForStart() || !lease.claim(cmd, at)) { result = 6; continue; }
+    if (cmd.action == WebAction::Clear) {
+      if (webMotionLocked() || motorIsRunning() || smGetState() != STATE_ERROR) { result = 6; continue; }
+      smCommandClearError(); lease.revoke(); result = smGetError() ? 8 : 10; continue;
+    }
+    if (cmd.action == WebAction::Start || cmd.action == WebAction::Home) {
+      const bool home = cmd.action == WebAction::Home;
+      if (webMotionLocked() || !stoppedForStart() || (home && smGetState() != STATE_NEED_HOMING) ||
+          !lease.claim(cmd, at)) { result = 6; continue; }
+      homingSession = home;
       dispatching = true;
-      smCommandStartCalib();
+      if (home) smCommandStartHoming();
+      else smCommandStartCalib();
       dispatching = false;
       result = 1;
       continue;
