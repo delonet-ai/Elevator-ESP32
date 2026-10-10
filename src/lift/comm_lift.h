@@ -18,3 +18,7 @@ void commSendStatusIfDue();
 
 // Известен ли адрес пульта.
 bool commHasPeer();
+// Fresh received traffic, not simply a registered ESP-NOW peer.
+bool commRemoteSeen();
+bool commRemoteOnline();
+uint32_t commRemoteAgeMs();

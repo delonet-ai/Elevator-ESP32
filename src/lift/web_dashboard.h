@@ -20,6 +20,8 @@ struct WebSnapshot {
   uint32_t motionRevision;
   uint8_t motionStorage;
   JournalSnapshot journal;
+  bool remoteSeen, remoteOnline;
+  uint32_t remoteAgeMs;
 };
 
 bool dashboardInit(const char *password);

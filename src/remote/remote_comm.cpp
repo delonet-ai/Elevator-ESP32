@@ -13,6 +13,7 @@ bool linkUp = false;
 LiftStatus status = {};
 unsigned long lastStatus = 0;
 unsigned long lastSearch = 0;
+unsigned long lastHeartbeat = 0;
 uint16_t sequence = 0;
 uint8_t channel = ESPNOW_CHANNEL;
 // Callback data is published atomically; all peer and UI work stays in loop().
@@ -94,6 +95,10 @@ void commUpdate() {
     linkUp = fresh;
     LOG_I("[COMM] Link %s", linkUp ? "UP" : "LOST");
   }
+  if (linkUp && now - lastHeartbeat >= REMOTE_HEARTBEAT_MS) {
+    lastHeartbeat = now;
+    commSend(CMD_DISCOVER, 0); // Presence only; the base never moves for DISCOVER.
+  }
   if (!linkUp && now - lastSearch >= 400) {
     lastSearch = now;
     channel = channel == 13 ? 1 : channel + 1;
@@ -107,7 +112,7 @@ void commSend(uint8_t type, uint8_t arg) {
   // No broadcast movement commands while searching or after a stale status.
   if (type != CMD_DISCOVER && (!linkUp || millis() - lastStatus >= LINK_TIMEOUT_MS)) return;
   RemoteCommand cmd = {PROTO_MAGIC, PROTO_VERSION, type, arg, ++sequence};
-  const uint8_t *dst = type == CMD_DISCOVER ? BROADCAST_MAC : baseMac;
+  const uint8_t *dst = type == CMD_DISCOVER && !linkUp ? BROADCAST_MAC : baseMac;
   esp_now_send(dst, reinterpret_cast<uint8_t*>(&cmd), sizeof(cmd));
 }
 

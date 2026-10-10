@@ -29,6 +29,12 @@ jobs:
           /tmp/event-journal-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/state_journal_test.cpp -o /tmp/state-journal-test
           /tmp/state-journal-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/remote_presence_test.cpp -o /tmp/remote-presence-test
+          /tmp/remote-presence-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Wno-unused-parameter -I tests/radio_stubs -I tests/stubs -I src/common tests/base_radio_test.cpp -o /tmp/base-radio-test
+          /tmp/base-radio-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Wno-unused-parameter -I tests/radio_stubs -I tests/stubs -I src/common tests/remote_radio_test.cpp -o /tmp/remote-radio-test
+          /tmp/remote-radio-test
 
   firmware:
     runs-on: ubuntu-latest

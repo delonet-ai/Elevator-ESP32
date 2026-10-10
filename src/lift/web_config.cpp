@@ -120,6 +120,9 @@ void webUpdate() {
     snapshot.known = smPositionKnown();
     snapshot.top = ioTopSwitchActive();
     snapshot.peer = commHasPeer();
+    snapshot.remoteSeen = commRemoteSeen();
+    snapshot.remoteOnline = commRemoteOnline();
+    snapshot.remoteAgeMs = commRemoteAgeMs();
     snapshot.stationary = stationary() && !locked;
     snapshot.calibOwner = webCalibrationOwner();
     snapshot.calibGeneration = webCalibrationGeneration();

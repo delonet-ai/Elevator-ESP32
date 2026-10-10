@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 enum class EventKind : uint8_t {
-  Boot = 0, State, Error, Stop, Motor, Top, Calibration, MotionSettings
+  Boot = 0, State, Error, Stop, Motor, Top, Calibration, MotionSettings, RemoteLink
 };
 struct JournalEvent {
   uint32_t id, uptime;

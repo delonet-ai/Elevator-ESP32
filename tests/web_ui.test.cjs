@@ -34,6 +34,25 @@ function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationar
 
 const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
 
+test('registered peer remains distinct from fresh remote traffic and its age',async()=>{
+  let status=motionStatus({peer:true,remoteSeen:false,remoteOnline:false,remoteAgeMs:0});
+  const nodes=await load(async()=>({ok:true,json:async()=>status}));
+  const rows=()=>Object.fromEntries(nodes.values.children.reduce((pairs,item,i,all)=>i%2?pairs:[...pairs,[item.textContent,all[i+1].textContent]],[]));
+  assert.equal(rows()['Пульт зарегистрирован'],'Да');assert.equal(rows()['Пакеты от пульта'],'Ещё не получены');
+  assert.equal(rows()['Последний пакет пульта'],'—');
+  status={...status,remoteSeen:true,remoteOnline:true,remoteAgeMs:500};await nodes.refresh();
+  assert.equal(rows()['Пакеты от пульта'],'Приходят');assert.equal(rows()['Последний пакет пульта'],'0.5 с назад');
+  status={...status,remoteOnline:false,remoteAgeMs:3200};await nodes.refresh();
+  assert.equal(rows()['Пульт зарегистрирован'],'Да');assert.equal(rows()['Пакеты от пульта'],'Нет свежих пакетов');
+});
+
+test('journal describes remote link loss and recovery',async()=>{
+  const events=[{id:1,uptime:1,kind:8,value:1,position:0},{id:2,uptime:3001,kind:8,value:0,position:0}];
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}),async()=>({ok:true,json:async()=>({boot:'test',age:0,overwritten:0,events})}));
+  assert.match(nodes.eventsList.children[0].textContent,/Нет свежих пакетов/);
+  assert.match(nodes.eventsList.children[1].textContent,/восстановлена/);
+});
+
 test('journal renders newest first, uses protocol error codes, and exports no credentials',async()=>{
   const data={boot:'boot-log',age:10,overwritten:5,token:'secret',events:[
     {id:1,uptime:500,kind:0,value:0,position:0},

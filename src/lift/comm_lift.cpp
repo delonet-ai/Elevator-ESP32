@@ -5,6 +5,8 @@
 #include "protocol.h"
 #include "espnow_compat.h"
 #include "log.h"
+#include "remote_presence.h"
+#include "event_journal.h"
 
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -16,24 +18,23 @@ namespace {
 
 const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// Очередь глубиной 8: команд приходит немного, но при заторе в loop()
-// лучше потерять самые старые, чем блокировать задачу Wi-Fi.
+// Очередь глубиной 8. При заполнении новый пакет отбрасывается:
+// задача Wi-Fi не должна ждать основной цикл управления.
 QueueHandle_t g_cmdQueue = nullptr;
 struct QueuedCommand {
   RemoteCommand command;
-  unsigned long receivedAt;
+  uint32_t receivedAt;
+  uint8_t source[6];
 };
 
 uint8_t g_remoteMac[6]   = {0};
-volatile bool g_haveRemoteMac = false;
+bool g_haveRemoteMac = false;
 bool    g_peerAdded      = false;
 
 unsigned long g_lastStatusMs = 0;
 
-// MAC отправителя последнего пакета: из колбэка в loop() передаём
-// через буфер, а не добавляем peer прямо в задаче Wi-Fi.
-volatile bool g_pendingPeer = false;
-uint8_t g_pendingMac[6] = {0};
+RemotePresence presence;
+bool lastOnline = false;
 
 bool addPeer(const uint8_t *mac) {
   if (esp_now_is_peer_exist(mac)) return true;
@@ -65,16 +66,14 @@ ESPNOW_RECV_CB(onRecv) {
   memcpy(&cmd, data, sizeof(cmd));
 
   const uint8_t *src = ESPNOW_RECV_SRC_MAC;
-  if (src != nullptr && memcmp(src, BROADCAST_MAC, 6) != 0) {
-    if (!g_haveRemoteMac || memcmp(g_remoteMac, src, 6) != 0) {
-      memcpy(g_pendingMac, src, 6);
-      g_pendingPeer = true;
-    }
-  }
-
+  if (!src || memcmp(src, BROADCAST_MAC, 6) == 0 ||
+      cmd.type < CMD_CALL_FLOOR || cmd.type > CMD_DISCOVER) return;
   if (g_cmdQueue != nullptr) {
-    // Не ждём места в очереди: задача Wi-Fi не должна блокироваться.
-    QueuedCommand queued = {cmd, millis()};
+    QueuedCommand queued = {};
+    queued.command = cmd;
+    queued.receivedAt = millis();
+    memcpy(queued.source, src, 6);
+    // The source travels with its command: no shared MAC mailbox race.
     xQueueSend(g_cmdQueue, &queued, 0);
   }
 }
@@ -141,27 +140,33 @@ bool commInit() {
 }
 
 void commPoll() {
-  if (g_pendingPeer) {
-    g_pendingPeer = false;
-    if (addPeer(g_pendingMac)) {
-      memcpy(g_remoteMac, g_pendingMac, 6);
-      g_haveRemoteMac = true;
-      g_peerAdded     = true;
-      LOG_I("[COMM] Remote %02X:%02X:%02X:%02X:%02X:%02X registered",
+  presence.poll(millis());
+  if (g_cmdQueue == nullptr) return;
+  QueuedCommand queued;
+  // Bound callback traffic work per loop so local protections keep running.
+  for (uint8_t i = 0; i < 8 && xQueueReceive(g_cmdQueue, &queued, 0) == pdTRUE; ++i) {
+    const uint32_t now = millis();
+    // Never adopt a peer or revive link status from old queued traffic.
+    if (now - queued.receivedAt <= 250) {
+      if (!g_haveRemoteMac || memcmp(g_remoteMac, queued.source, 6) != 0 || !g_peerAdded) {
+        if (addPeer(queued.source)) {
+          memcpy(g_remoteMac, queued.source, 6);
+          g_haveRemoteMac = true;
+          g_peerAdded = true;
+          LOG_I("[COMM] Remote %02X:%02X:%02X:%02X:%02X:%02X registered",
             g_remoteMac[0], g_remoteMac[1], g_remoteMac[2],
             g_remoteMac[3], g_remoteMac[4], g_remoteMac[5]);
-    }
-  }
-
-  if (g_cmdQueue == nullptr) return;
-
-  QueuedCommand queued;
-  while (xQueueReceive(g_cmdQueue, &queued, 0) == pdTRUE) {
-    // HTTP / provisioning may wait while stationary. Never execute an old
-    // movement command after such a wait; stop commands remain valid.
-    if (millis() - queued.receivedAt > 250 &&
-        queued.command.type != CMD_STOP && queued.command.type != CMD_MANUAL_STOP) continue;
+        }
+      }
+      if (g_haveRemoteMac && memcmp(g_remoteMac, queued.source, 6) == 0)
+        presence.observe(queued.receivedAt, now);
+    } else if (queued.command.type != CMD_STOP && queued.command.type != CMD_MANUAL_STOP) continue;
     handleCommand(queued.command);
+  }
+  presence.poll(millis());
+  if (presence.online() != lastOnline) {
+    lastOnline = presence.online();
+    journalRecord(EventKind::RemoteLink, lastOnline);
   }
 }
 
@@ -191,3 +196,7 @@ void commSendStatusIfDue() {
 bool commHasPeer() {
   return g_peerAdded;
 }
+
+bool commRemoteSeen() { return presence.received(); }
+bool commRemoteOnline() { return presence.online(); }
+uint32_t commRemoteAgeMs() { return presence.age(); }

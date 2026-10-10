@@ -17,6 +17,9 @@ static const uint8_t ESPNOW_CHANNEL = 1;
 
 // Период отправки статуса база -> пульт.
 static const uint32_t STATUS_PERIOD_MS = 200;
+// Remote -> base presence diagnostics, independent of manual hold protection.
+static const uint32_t REMOTE_HEARTBEAT_MS = 1000;
+static const uint32_t REMOTE_PRESENCE_TIMEOUT_MS = 3000;
 
 // --- Команды: пульт -> база -------------------------------------------------
 

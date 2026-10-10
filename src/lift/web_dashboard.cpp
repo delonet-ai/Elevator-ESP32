@@ -83,7 +83,7 @@ bool dashboardInit(const char *accessPassword) {
       "\"error\":%u,\"top\":%s,\"speed\":%u,\"peer\":%s,\"channel\":%u,"
       "\"uptime\":%lu,\"ip\":\"%s\",\"token\":\"%s\",\"stationary\":%s,"
       "\"running\":%s,\"travel\":%ld,\"freeHeap\":%lu,\"rssi\":%ld,"
-      "\"age\":%lu,\"networkResult\":%u,\"calibOwner\":%lu,\"calibGeneration\":%lu,"
+      "\"remoteSeen\":%s,\"remoteOnline\":%s,\"remoteAgeMs\":%lu,\"age\":%lu,\"networkResult\":%u,\"calibOwner\":%lu,\"calibGeneration\":%lu,"
       "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s,"
       "\"motionRevision\":%lu,\"motionResult\":%u,\"motionStorage\":%u,"
       "\"motion\":{\"minimum\":%lu,\"maximum\":%lu,\"manual\":%lu,\"homing\":%lu,\"down\":%lu,\"acceleration\":%lu}}",
@@ -91,6 +91,7 @@ bool dashboardInit(const char *accessPassword) {
       s.top?"true":"false",s.speed,s.peer?"true":"false",s.channel,
       (unsigned long)s.uptime,s.ip,token.c_str(),s.stationary?"true":"false",
       s.running?"true":"false",(long)s.travel,(unsigned long)s.freeHeap,(long)s.rssi,
+      s.remoteSeen?"true":"false",s.remoteOnline?"true":"false",(unsigned long)s.remoteAgeMs,
       (unsigned long)(millis()-s.uptime),result,(unsigned long)s.calibOwner,
       (unsigned long)s.calibGeneration,s.calibResult,s.calibCanStart?"true":"false",s.calibCanSave?"true":"false",
       (unsigned long)s.motionRevision, settingsResult, s.motionStorage,

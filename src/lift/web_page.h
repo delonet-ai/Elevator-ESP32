@@ -50,6 +50,7 @@ function eventText(e){
     case 4:return value?'Мотор движется':'Мотор остановлен';
     case 5:return value?'Верхний концевик нажат':'Верхний концевик свободен';
     case 6:return 'Веб-калибровка: '+(results[value]??value);
+    case 8:return value?'Связь с пультом восстановлена':'Нет свежих пакетов от пульта';
     case 7:return 'Параметры движения: '+({2:'сохранены',3:'запрос отклонён',4:'ошибка записи'}[value]??value);
     default:return 'Событие '+e.kind+': '+value;
   }
@@ -204,7 +205,7 @@ async function update(){
     el('connection').textContent='База доступна · '+s.ip;
     const phase=s.calibOwner&&s.state===2?'Подъём до верхнего концевика':s.calibOwner&&s.state===3?(s.running?'Спуск. Отпустите кнопку для остановки':'Верх найден. Удерживайте вниз или сохраните нижнюю точку'):(results[s.calibResult]||states[s.state]);
     el('calibState').textContent=(s.calibOwner&&s.calibOwner!==owner?'Управляет другая вкладка. ':'')+phase;
-    const rows=[['Состояние',states[s.state]||s.state],['Этаж / цель',s.floor+' / '+s.target],['Позиция, шагов',s.position],['Позиция известна',s.known?'Да':'Нет'],['Ошибка',s.error],['Верхний концевик',s.top?'Нажат':'Свободен'],['Регулятор скорости',s.speed+'%'],['Пульт зарегистрирован',s.peer?'Да':'Нет'],['Радиоканал',s.channel],['Время работы, с',Math.floor(s.uptime/1000)],['Мотор',s.running?'Движется':'Остановлен'],['Ход, шагов',s.travel],['Свободная память, КБ',Math.round(s.freeHeap/1024)],['Сигнал Wi-Fi',s.rssi+' dBm']];
+    const rows=[['Состояние',states[s.state]||s.state],['Этаж / цель',s.floor+' / '+s.target],['Позиция, шагов',s.position],['Позиция известна',s.known?'Да':'Нет'],['Ошибка',s.error],['Верхний концевик',s.top?'Нажат':'Свободен'],['Регулятор скорости',s.speed+'%'],['Пульт зарегистрирован',s.peer?'Да':'Нет'],['Радиоканал',s.channel],['Время работы, с',Math.floor(s.uptime/1000)],['Мотор',s.running?'Движется':'Остановлен'],['Ход, шагов',s.travel],['Свободная память, КБ',Math.round(s.freeHeap/1024)],['Сигнал Wi-Fi',s.rssi+' dBm'],['Пакеты от пульта',s.remoteOnline?'Приходят':s.remoteSeen?'Нет свежих пакетов':'Ещё не получены'],['Последний пакет пульта',s.remoteSeen?(s.remoteAgeMs/1000).toFixed(1)+' с назад':'—']];
     const box=el('values');box.replaceChildren();for(const [k,v]of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;box.append(dt,dd)}
   }catch(e){if(session)stopSession();token='';el('connection').textContent='Нет обновления: данные устарели или сеть недоступна';}
   controls();setTimeout(update,session?200:1000);
