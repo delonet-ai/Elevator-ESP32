@@ -19,6 +19,8 @@ QueueHandle_t commandQueue = nullptr;
 bool stopPending = false;
 QueueHandle_t motionQueue = nullptr;
 uint8_t motionResult = 0; // 1 queued, 2 saved, 3 rejected, 4 storage failure.
+QueueHandle_t soundQueue = nullptr;
+uint8_t soundResult = 0;
 
 bool csrfValid(AsyncWebServerRequest *request) {
   if (request->hasHeader("X-Lift-Token") && request->getHeader("X-Lift-Token")->value() == token) return true;
@@ -26,7 +28,7 @@ bool csrfValid(AsyncWebServerRequest *request) {
   return false;
 }
 
-bool readNumber(AsyncWebServerRequest *request, const char *key, uint32_t &value) {
+bool readNumber(AsyncWebServerRequest *request, const char *key, uint32_t &value, bool allowZero=false) {
   if (!request->hasParam(key, true)) return false;
   String text = request->getParam(key, true)->value();
   if (text.isEmpty() || text.length() > 10) return false;
@@ -35,7 +37,7 @@ bool readNumber(AsyncWebServerRequest *request, const char *key, uint32_t &value
     if (text[i] < '0' || text[i] > '9') return false;
     parsed = parsed * 10 + text[i] - '0';
   }
-  if (!parsed || parsed > UINT32_MAX) return false;
+  if ((!parsed && !allowZero) || parsed > UINT32_MAX) return false;
   value = (uint32_t)parsed;
   return true;
 }
@@ -61,7 +63,8 @@ bool dashboardInit(const char *accessPassword) {
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
   motionQueue = xQueueCreate(1, sizeof(MotionRequest));
-  if (!networkQueue || !commandQueue || !motionQueue) return false;
+  soundQueue = xQueueCreate(1, sizeof(SoundRequest));
+  if (!networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -100,6 +103,47 @@ bool dashboardInit(const char *accessPassword) {
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+  });
+  server.on("/api/sound", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if(!authorize(request))return;
+    SoundSnapshot s; uint32_t at;uint8_t result;
+    portENTER_CRITICAL(&snapshotMux);
+    s=latest.sound;at=latest.uptime;result=soundResult;
+    portEXIT_CRITICAL(&snapshotMux);
+    char json[512];
+    snprintf(json,sizeof(json),
+      "{\"boot\":\"%s\",\"age\":%lu,\"revision\":%lu,\"result\":%u,\"storage\":%u,\"ready\":%s,"
+      "\"active\":%u,\"last\":%u,\"argument\":%u,\"queued\":%u,\"errors\":%lu,\"discarded\":%lu,"
+      "\"settings\":{\"enabled\":%lu,\"routine\":%lu,\"volume\":%lu}}",
+      journalBoot.c_str(),(unsigned long)(millis()-at),(unsigned long)s.revision,result,s.storage,s.ready?"true":"false",
+      s.active,s.last,s.argument,s.queued,(unsigned long)s.errors,(unsigned long)s.discarded,
+      (unsigned long)s.settings.enabled,(unsigned long)s.settings.routine,(unsigned long)s.settings.volume);
+    auto *response=request->beginResponse(200,"application/json",json);
+    response->addHeader("Cache-Control","no-store");request->send(response);
+  });
+  server.on("/api/sound", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if(!authorize(request)||!csrfValid(request))return;
+    SoundRequest command={};
+    if(!request->hasParam("action",true)||!readNumber(request,"revision",command.revision)){
+      request->send(400,"text/plain","Invalid sound request");return;
+    }
+    const String action=request->getParam("action",true)->value();
+    command.test=action=="test";
+    if((!command.test && action!="save") || (!command.test &&
+      (!readNumber(request,"enabled",command.settings.enabled,true)||
+       !readNumber(request,"routine",command.settings.routine,true)||
+       !readNumber(request,"volume",command.settings.volume,true)||!soundValid(command.settings)))){
+      request->send(400,"text/plain","Invalid sound settings");return;
+    }
+    command.receivedAt=millis();bool allowed;
+    portENTER_CRITICAL(&snapshotMux);
+    allowed=accepting&&!stopPending&&latest.stationary&&!latest.calibOwner&&networkResult!=1&&
+      soundResult!=1&&command.receivedAt-latest.uptime<1000&&command.revision==latest.sound.revision;
+    if(allowed)soundResult=1;
+    portEXIT_CRITICAL(&snapshotMux);
+    if(!allowed){request->send(409,"text/plain","Sound settings unavailable or stale");return;}
+    if(xQueueSend(soundQueue,&command,0)!=pdTRUE){dashboardSoundResult(3);request->send(503,"text/plain","Queue busy");return;}
+    request->send(202,"text/plain","Queued");
   });
   server.on("/api/events", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
@@ -260,3 +304,6 @@ void dashboardMotionResult(uint8_t result) {
   motionResult = result;
   portEXIT_CRITICAL(&snapshotMux);
 }
+
+bool dashboardTakeSoundRequest(SoundRequest &request){return soundQueue&&xQueueReceive(soundQueue,&request,0)==pdTRUE;}
+void dashboardSoundResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);soundResult=result;portEXIT_CRITICAL(&snapshotMux);}

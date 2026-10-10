@@ -7,18 +7,20 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/lift/web_page.h'), 'utf8');
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-async function load(fetch,fetchEvents=async()=>({ok:true,json:async()=>({boot:'test',age:0,overwritten:0,events:[]})})) {
+const soundStatus=(extra={})=>({boot:'sound-boot',age:0,revision:1,result:0,storage:0,ready:false,active:0,last:0,argument:0,queued:0,errors:0,discarded:0,settings:{enabled:1,routine:1,volume:60},...extra});
+async function load(fetch,fetchEvents=async()=>({ok:true,json:async()=>({boot:'test',age:0,overwritten:0,events:[]})}),fetchSound=async()=>({ok:true,json:async()=>soundStatus()})) {
   const nodes = {};
   const events = {};
   const downloads=[];
   function node(tag) { return {textContent:'', children:[], click(){if(tag==='a')downloads.push({href:this.href,download:this.download});},remove(){},setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
-  const context = vm.createContext({fetch:(url,options)=>url==='/api/events'?fetchEvents(url,options):fetch(url,options), AbortSignal, URLSearchParams, Uint32Array,
+  const context = vm.createContext({fetch:(url,options)=>url==='/api/events'?fetchEvents(url,options):url==='/api/sound'&&!options?.method?fetchSound(url,options):fetch(url,options), AbortSignal, URLSearchParams, Uint32Array,
     crypto:{getRandomValues:a=>{a[0]=42;return a;}}, confirm:()=>true, setTimeout:()=>{}, clearTimeout:()=>{},
     window:{addEventListener:(name,fn)=>events[name]=fn},
     document:{body:node(),addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
   vm.runInContext(script, context);
   await new Promise(resolve=>setImmediate(resolve));
   nodes.refresh = () => vm.runInContext('update()', context);
+  nodes.refreshSound = () => vm.runInContext('updateSound()', context);
   nodes.refreshEvents = () => vm.runInContext('updateEvents()', context);
   nodes.event = name => events[name]();
   nodes.downloads=downloads;
@@ -33,6 +35,44 @@ const defaultMotion={minimum:200,maximum:2000,manual:400,homing:400,down:1200,ac
 function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationary:true,calibOwner:0,motion:{...defaultMotion},motionRevision:1,motionStorage:0,motionResult:0,...extra}; }
 
 const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
+
+test('sound without hardware permits configuration but cannot play a test',async()=>{
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}));
+  assert.equal(nodes.soundSave.disabled,false);assert.equal(nodes.soundTest.disabled,true);
+  assert.match(nodes.soundStatus.textContent,/не воспроизводится/);
+});
+
+test('sound preserves edits and confirms zero volume only after persistent revision',async()=>{
+  let data=soundStatus();const posts=[];
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>motionStatus()};},undefined,async()=>({ok:true,json:async()=>data}));
+  nodes.soundVolume.value='0';nodes.soundVolume.oninput();await nodes.refreshSound();
+  assert.equal(nodes.soundVolume.value,'0');await nodes.soundSave.onclick();
+  assert.equal(posts[0].body.get('volume'),'0');assert.equal(posts[0].headers['X-Lift-Token'],'boot-1');
+  assert.equal(nodes.soundSave.disabled,true);
+  data=soundStatus({revision:2,result:2,settings:{enabled:1,routine:1,volume:0}});await nodes.refreshSound();
+  assert.match(nodes.soundMessage.textContent,/настройки сохранены/);assert.equal(nodes.soundSave.disabled,false);
+});
+
+test('sound write failure keeps edits and stale telemetry blocks settings',async()=>{
+  let data=soundStatus();
+  const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}),undefined,async()=>({ok:true,json:async()=>data}));
+  nodes.soundVolume.value='25';nodes.soundVolume.oninput();await nodes.soundSave.onclick();
+  data=soundStatus({result:4});await nodes.refreshSound();
+  assert.match(nodes.soundMessage.textContent,/Ошибка памяти/);assert.equal(nodes.soundVolume.value,'25');
+  data=soundStatus({age:1500});await nodes.refreshSound();assert.equal(nodes.soundSave.disabled,true);
+});
+
+test('sound test uses saved settings and is blocked by movement or reboot with edits',async()=>{
+  let data=soundStatus({ready:true}),status=motionStatus();const posts=[];
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>status};},undefined,async()=>({ok:true,json:async()=>data}));
+  assert.equal(nodes.soundTest.disabled,false);await nodes.soundTest.onclick();
+  assert.equal(posts[0].body.get('action'),'test');data={...data,result:5};await nodes.refreshSound();
+  assert.match(nodes.soundMessage.textContent,/очередь/);
+  status=motionStatus({stationary:false});await nodes.refresh();assert.equal(nodes.soundTest.disabled,true);
+  status=motionStatus();await nodes.refresh();nodes.soundVolume.value='25';nodes.soundVolume.oninput();
+  data={...data,boot:'new'};await nodes.refreshSound();assert.equal(nodes.soundSave.disabled,true);
+  nodes.soundReload.onclick();assert.equal(nodes.soundSave.disabled,false);assert.equal(nodes.soundVolume.value,'60');
+});
 
 test('expanded knob endpoints save and import while homing speed keeps its limit',async()=>{
   const posts=[];const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push(options);return {ok:true,json:async()=>motionStatus(),text:async()=> 'Queued'};});

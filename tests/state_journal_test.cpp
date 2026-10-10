@@ -3,6 +3,12 @@ class Stream { public: template<typename... Args> void printf(const char*, Args.
 #include "../src/lift/state_machine.cpp"
 #include "../src/lift/event_journal.cpp"
 TestSerial Serial;
+static SoundCue lastSound=SoundCue::None;
+static uint16_t soundArgument=0;
+void soundEmit(SoundCue cue,uint16_t argument) {
+  if(cue==SoundCue::Stop||cue==SoundCue::Error)assert(!motorIsRunning());
+  lastSound=cue;soundArgument=argument;
+}
 static unsigned long clockMs = 100;
 static long position = 0;
 static bool top = false, running = false, locked = false;
@@ -35,9 +41,11 @@ bool motorIsRunning() { return running; }
 int motorGetDirection() { return direction; }
 int main() {
   smInit();
+  assert(lastSound==SoundCue::Boot);
   assert(smGetState() == STATE_NEED_CALIB);
   top = true;
   smCommandStartCalib(); // Both transitions occur before the next loop iteration.
+  assert(lastSound==SoundCue::CalibrationStart);
   auto events = journalSnapshot();
   assert(events.count == 4);
   assert(events.entries[2].value == STATE_CALIB_HOMING_UP);
@@ -49,11 +57,13 @@ int main() {
   position = -1200;
   smCommandCalibDownSave(); // Failed persistence must still stop and enter error.
   assert(!running && smGetState() == STATE_ERROR && smGetError() == ERR_STORAGE);
+  assert(lastSound==SoundCue::Error&&soundArgument==ERR_STORAGE);
   events = journalSnapshot();
   assert(events.entries[4].kind == static_cast<uint8_t>(EventKind::Error));
   assert(events.entries[4].value == ERR_STORAGE && events.entries[4].position == -1200);
   locked = true; running = true;
   smCommandStop(); assert(!running); // Logging does not change unconditional STOP.
+  assert(lastSound==SoundCue::Stop);
   events = journalSnapshot();
   assert(events.entries[events.count-1].kind == static_cast<uint8_t>(EventKind::Stop));
   locked = false; smCommandClearError();

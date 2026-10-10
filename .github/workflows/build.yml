@@ -25,6 +25,10 @@ jobs:
           /tmp/calibration-storage-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/motion_settings_test.cpp -o /tmp/motion-settings-test
           /tmp/motion-settings-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/sound_engine_test.cpp -o /tmp/sound-engine-test
+          /tmp/sound-engine-test
+          g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/sound_manager_test.cpp -o /tmp/sound-manager-test
+          /tmp/sound-manager-test
           g++ -std=c++11 -Wall -Wextra -Werror tests/event_journal_test.cpp -o /tmp/event-journal-test
           /tmp/event-journal-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/state_journal_test.cpp -o /tmp/state-journal-test

@@ -108,6 +108,7 @@ void webUpdate() {
     lastSnapshot = now;
     WebSnapshot snapshot = {};
     snapshot.journal = journalSnapshot();
+    snapshot.sound = soundSnapshot();
     snapshot.motion = motionSettings();
     snapshot.motionRevision = motionRevision();
     snapshot.motionStorage = motionStorageStatus();
@@ -159,6 +160,11 @@ void webUpdate() {
     }
     journalRecord(EventKind::MotionSettings, result);
     dashboardMotionResult(result);
+  }
+  SoundRequest soundRequest;
+  if (dashboardTakeSoundRequest(soundRequest)) {
+    dashboardSoundResult(soundApply(soundRequest, millis(),
+      !webMotionLocked() && stationary() && WiFi.status() == WL_CONNECTED));
   }
   // Provisioning may block; the dashboard itself runs in the HTTP task.
   if (!stationary()) return;

@@ -25,6 +25,7 @@
 #include "web_config.h"
 #include "web_calibration.h"
 #include "motion_settings.h"
+#include "sound_manager.h"
 
 static unsigned long g_lastTick = 0;
 
@@ -45,6 +46,7 @@ void setup() {
 
   floorInit();
   calibInit();
+  soundInit();
   smInit();
   webInit();
 
@@ -77,5 +79,6 @@ void loop() {
   }
 
   commSendStatusIfDue();
+  soundUpdate();
   webUpdate();
 }

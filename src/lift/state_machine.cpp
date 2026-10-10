@@ -8,6 +8,7 @@
 #include "config.h"
 #include "motion_settings.h"
 #include "event_journal.h"
+#include "sound_manager.h"
 #include "log.h"
 
 namespace {
@@ -49,6 +50,7 @@ void setState(LiftState state) {
 void enterError(LiftError code, const char *why) {
   motorStopHard();
   journalRecord(EventKind::Error, code);
+  soundEmit(SoundCue::Error, code);
   setState(STATE_ERROR);
   g_error           = code;
   g_manualDir       = 0;
@@ -103,6 +105,7 @@ void handleTopSwitch() {
       motorSetPosition(floorGetTopSwitchPosition());
       g_positionKnown = true;
       enterIdle();
+      soundEmit(SoundCue::HomeReady);
       LOG_I("[SM] Homing done, position = %ld", motorGetPosition());
       break;
 
@@ -152,6 +155,7 @@ void holdRefresh() {
 
 void smInit() {
   journalRecord(EventKind::Boot, 0);
+  soundEmit(SoundCue::Boot);
   g_error         = ERR_NONE;
   g_targetFloor   = 0;
   g_positionKnown = false;
@@ -244,6 +248,7 @@ void smTick() {
 
       if (dist <= POSITION_TOLERANCE && !motorIsRunning()) {
         motorStopSmooth();
+        soundEmit(SoundCue::Arrival, g_targetFloor);
         LOG_I("[SM] Arrived at floor %u (pos %ld)", g_targetFloor, pos);
         enterIdle();
         break;
@@ -331,6 +336,7 @@ void smCommandMoveToFloor(uint8_t floor) {
   g_motionTimeoutMs = expected + rampAllowance + MOTION_TIMEOUT_MIN_MS;
 
   motorMoveTo(dest);
+  soundEmit(SoundCue::Departure, floor);
   LOG_I("[SM] Moving to floor %u (pos %ld -> %ld)", floor, pos, dest);
 }
 
@@ -340,6 +346,7 @@ void smCommandStop() {
   webCalibrationExternalStop();
   // Экстренный стоп обязан работать в любом состоянии, включая калибровку.
   motorStopHard();
+  soundEmit(SoundCue::Stop);
   g_holdDeadline = 0;
   g_targetFloor  = 0;
   g_calibDescending = false;
@@ -376,6 +383,7 @@ void smCommandStartCalib() {
   g_positionKnown = false;
   g_targetFloor   = 0;
   setState(STATE_CALIB_HOMING_UP);
+  soundEmit(SoundCue::CalibrationStart);
   g_calibDescending = false;
   g_motionStartMs   = millis();
   if (ioTopSwitchActive()) {
@@ -425,6 +433,7 @@ void smCommandCalibDownSave() {
   g_positionKnown = true;
   g_error         = ERR_NONE;
   enterIdle();
+  soundEmit(SoundCue::CalibrationSaved);
   LOG_I("[SM] Calibration finished, lift ready");
 }
 

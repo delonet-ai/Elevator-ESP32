@@ -3,6 +3,7 @@
 #include "web_control_policy.h"
 #include "motion_settings.h"
 #include "event_journal.h"
+#include "sound_manager.h"
 
 // Immutable copies cross from the control loop into the HTTP task. Never
 // call the state machine, motor or Preferences from an HTTP callback.
@@ -22,6 +23,7 @@ struct WebSnapshot {
   JournalSnapshot journal;
   bool remoteSeen, remoteOnline;
   uint32_t remoteAgeMs;
+  SoundSnapshot sound;
 };
 
 bool dashboardInit(const char *password);
@@ -35,3 +37,6 @@ bool dashboardTakeStopRequest();
 
 bool dashboardTakeMotionRequest(MotionRequest &request);
 void dashboardMotionResult(uint8_t result);
+
+bool dashboardTakeSoundRequest(SoundRequest &request);
+void dashboardSoundResult(uint8_t result);

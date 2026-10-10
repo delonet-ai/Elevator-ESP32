@@ -7,11 +7,12 @@ const char PAGE[] PROGMEM = R"HTML(<!doctype html><html lang="ru"><meta charset=
 body{font:16px system-ui;background:#101826;color:#edf3ff;margin:0;padding:24px}main{max-width:760px;margin:auto}h1{margin-bottom:8px}.muted{color:#aabbd4}section{background:#1c293c;border-radius:16px;padding:24px;margin:20px 0}dl{display:grid;grid-template-columns:1fr 1fr;gap:14px}dd{margin:0;text-align:right}button:disabled{opacity:.45;cursor:default}button{background:#73d5b6;color:#10251f;border:0;border-radius:8px;padding:14px;font:inherit;cursor:pointer}.buttons{display:flex;flex-wrap:wrap;gap:10px}.stop{background:#ff8585}.secondary{background:#b2c5df}#down{touch-action:none;user-select:none}a{color:#73d5b6}
 label{display:block;margin:12px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font:inherit;border-radius:6px;border:1px solid #789;background:#101826;color:#edf3ff}
 input[hidden]{display:none}
+input[type=checkbox]{display:inline-block;width:auto;margin-right:10px}
 .controlbar{position:sticky;top:0;z-index:10;background:#101826;padding:10px 0;border-bottom:1px solid #43536b;display:flex;align-items:center;flex-wrap:wrap;gap:10px}.controlbar p{flex:1;margin:0;min-width:150px}nav{display:flex;flex-wrap:wrap;gap:16px;padding:16px 0}section{scroll-margin-top:130px}#eventsList{max-height:360px;overflow:auto;padding-left:24px}#eventsList li{margin:10px 0}dd{overflow-wrap:anywhere}@media(max-width:480px){body{padding:12px}section{padding:16px}dl{gap:10px;font-size:14px}}
 
 </style>
 <main><p class="muted">ELEVATOR ESP32</p><h1>Управление лифтом</h1><div class="controlbar"><p id="connection" role="status">Подключение…</p><button id="stop" class="stop" disabled>СТОП</button></div>
-<nav aria-label="Разделы"><a href="#statusSection">Состояние</a><a href="#calibSection">Калибровка</a><a href="#motionSection">Скорости</a><a href="#networkSection">Wi-Fi</a><a href="#eventsSection">Журнал</a></nav>
+<nav aria-label="Разделы"><a href="#statusSection">Состояние</a><a href="#calibSection">Калибровка</a><a href="#motionSection">Скорости</a><a href="#soundSection">Звук</a><a href="#networkSection">Wi-Fi</a><a href="#eventsSection">Журнал</a></nav>
 <section id="statusSection"><h2>Состояние</h2><dl id="values"></dl><p id="errorHelp" role="status"></p>
 <div class="buttons"><button id="home" disabled>Восстановить позицию по верху</button><button id="clear" class="secondary" disabled>Сбросить ошибку</button></div>
 <p class="muted">Восстановление позиции поднимает кабину до концевика без стирания калибровки. Сброс ошибки сам по себе не запускает движение.</p></section>
@@ -33,6 +34,13 @@ input[hidden]{display:none}
 <input id="motionFile" type="file" accept=".json,application/json" hidden>
 <p class="muted">Файл содержит только скорости и ускорение. Загрузка заполняет поля для проверки; примените их кнопкой «Сохранить параметры».</p>
 <p id="motionMessage"></p><p id="motionStorage" class="muted"></p><p class="muted">Сохранение доступно только после остановки и вне калибровки. Подстановка исходных значений требует сохранения. Настройки не запускают мотор.</p></section>
+<section id="soundSection"><h2>Звук</h2><p id="soundStatus">Ожидание звуковой подсистемы…</p>
+<label><input id="soundEnabled" type="checkbox" disabled>Включить звуковые оповещения</label>
+<label><input id="soundRoutine" type="checkbox" disabled>Обычные сигналы: запуск, поездка, прибытие и калибровка</label>
+<label>Громкость, %<input id="soundVolume" type="number" min="0" max="100" step="1" disabled></label>
+<div class="buttons"><button id="soundSave" disabled>Сохранить звук</button><button id="soundReload" class="secondary" disabled>Загрузить с базы</button><button id="soundTest" class="secondary" disabled>Проверить звук</button></div>
+<p id="soundMessage" role="status"></p><p id="soundEvent" class="muted"></p>
+<p class="muted">Отключение обычных сигналов сохраняет оповещения об ошибке, STOP и препятствии. Общее выключение или громкость 0 отключают весь звук. Звук не заменяет защиту лифта.</p></section>
 <section id="networkSection"><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
 <button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section>
 <section id="eventsSection"><h2>Журнал событий</h2><p class="muted">Последние 32 события с момента включения. Время — от запуска базы, позиция — в шагах. После перезапуска журнал очищается.</p>
@@ -43,6 +51,59 @@ const results=['','Поиск верхней точки запущен','Спу�
 const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
+const soundNames=['Нет','Запуск','Отправление','Прибытие','Начало калибровки','Калибровка сохранена','Позиция восстановлена','Ошибка','STOP','Двери открываются','Двери закрываются','Препятствие двери','Аварийная остановка','Тест'];
+let soundData=null,soundLive=false,soundDirty=false,soundRevision=0,soundBoot='',soundPending=null;
+function fillSound(s){el('soundEnabled').checked=!!s.settings.enabled;el('soundRoutine').checked=!!s.settings.routine;el('soundVolume').value=String(s.settings.volume);soundRevision=s.revision;soundBoot=s.boot;}
+function soundControls(){
+  const allowed=!!token&&!!snapshot&&snapshot.stationary&&!snapshot.calibOwner&&!session&&snapshot.networkResult!==1&&soundLive&&!soundPending;
+  for(const id of ['soundEnabled','soundRoutine','soundVolume'])el(id).disabled=!allowed;
+  el('soundSave').disabled=!allowed||!soundRevision;
+  el('soundReload').disabled=!soundLive||!!soundPending;
+  el('soundTest').disabled=!allowed||soundDirty||!soundData?.ready||!soundData?.settings.enabled||!soundData?.settings.volume;
+}
+for(const id of ['soundEnabled','soundRoutine','soundVolume'])el(id).oninput=()=>{soundDirty=true;soundControls();};
+el('soundReload').onclick=()=>{if(el('soundReload').disabled)return;fillSound(soundData);soundDirty=false;el('soundMessage').textContent='Параметры звука загружены.';soundControls();};
+async function updateSound(){
+  const pendingAtStart=soundPending,acknowledged=!!soundPending?.acknowledged;
+  try{
+    const r=await fetch('/api/sound',{cache:'no-store',signal:AbortSignal.timeout(1200)});
+    if(!r.ok)throw Error();const s=await r.json();
+    if(!s.settings||typeof s.boot!=='string'||!Number.isInteger(s.age)||s.age<0||s.age>1000||
+      !Number.isInteger(s.revision)||s.revision<1||![0,1].includes(s.settings.enabled)||![0,1].includes(s.settings.routine)||
+      !Number.isInteger(s.settings.volume)||s.settings.volume<0||s.settings.volume>100)throw Error();
+    soundLive=true;soundData=s;
+    if(soundBoot&&soundBoot!==s.boot){soundPending=null;if(soundDirty){soundRevision=0;el('soundMessage').textContent='База перезапущена. Загрузите актуальные параметры звука.';}}
+    if(soundPending&&soundPending===pendingAtStart&&acknowledged){
+      if(s.revision!==soundPending.revision){
+        const matches=soundPending.action==='save'&&Object.keys(soundPending.settings).every(k=>s.settings[k]===soundPending.settings[k]);
+        el('soundMessage').textContent=matches?'Звук: настройки сохранены.':'Настройки изменены другой вкладкой. Загрузите их с базы.';
+        soundPending=null;if(matches)soundDirty=false;
+      }else if([3,4,6].includes(s.result)||(soundPending.action==='test'&&s.result===5)){
+        el('soundMessage').textContent=({3:'Запрос звука отклонён: база занята или данные устарели.',4:'Ошибка памяти: прежние настройки звука сохранены.',5:'Тест поставлен в очередь звука.',6:'Звуковой модуль не готов.'})[s.result];soundPending=null;
+      }else if(Date.now()-soundPending.started>5000){soundPending=null;el('soundMessage').textContent='Нет подтверждения. Загрузите параметры звука с базы.';}
+    }
+    if(!soundDirty&&!soundPending)fillSound(s);
+    el('soundStatus').textContent=(s.ready?'Звуковой модуль готов.':'Звуковой модуль не настроен или недоступен. Звук не воспроизводится.')+
+      (s.storage===2?' Ошибка чтения настроек: используются исходные значения.':'')+' Ошибок воспроизведения: '+s.errors+'.';
+    el('soundEvent').textContent='Последнее событие: '+(soundNames[s.last]??s.last)+' · аргумент '+s.argument+' · в очереди '+s.queued+' · воспроизводится: '+(soundNames[s.active]??s.active);
+  }catch(e){soundLive=false;el('soundStatus').textContent='Нет свежих данных о звуке.';}
+  soundControls();setTimeout(updateSound,1000);
+}
+async function sendSound(action){
+  if(el(action==='save'?'soundSave':'soundTest').disabled)return;
+  const volume=Number(el('soundVolume').value);
+  if(!/^\d+$/.test(el('soundVolume').value)||!Number.isInteger(volume)||volume<0||volume>100){el('soundMessage').textContent='Громкость должна быть целой от 0 до 100.';return;}
+  const settings={enabled:Number(el('soundEnabled').checked),routine:Number(el('soundRoutine').checked),volume};
+  soundPending={action,settings,revision:soundRevision,started:Date.now(),acknowledged:false};soundControls();
+  try{
+    const r=await fetch('/api/sound',{method:'POST',headers:{'X-Lift-Token':token},body:new URLSearchParams({action,revision:soundRevision,...settings}),signal:AbortSignal.timeout(2000)});
+    if(!r.ok)throw Error(await r.text());
+    if(soundPending)soundPending.acknowledged=true;
+    el('soundMessage').textContent='Запрос звука передан. Ожидание подтверждения…';
+  }catch(e){soundPending=null;el('soundMessage').textContent='Запрос звука не подтверждён: '+e.message;}
+  soundControls();
+}
+el('soundSave').onclick=()=>sendSound('save');el('soundTest').onclick=()=>sendSound('test');
 let eventSnapshot=null;
 const errorNames=['Нет ошибки','Таймаут движения','Верхний концевик','Таймаут калибровки','Недостаточный ход','Программный предел','Позиция не определена','Ошибка памяти'];
 function eventText(e){
@@ -164,6 +225,7 @@ el('motionSave').onclick=async()=>{
   controls();
 };
 function controls(){
+  soundControls();
   const live=!!token&&!!snapshot, mine=live&&snapshot.calibOwner===owner;
   el('start').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
   el('down').disabled=!mine||!session||snapshot.state!==3;
@@ -243,5 +305,5 @@ window.addEventListener('blur',()=>{if(session)stopSession();});
 window.addEventListener('pagehide',()=>{if(session)stopSession();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&session)stopSession();});
 el('network').onclick=async()=>{if(!token||el('network').disabled||!confirm('Перейти в режим настройки сети?'))return;try{const r=await fetch('/api/network',{method:'POST',headers:{'X-Lift-Token':token}});el('message').textContent=await r.text();if(r.ok)el('network').disabled=true}catch(e){el('message').textContent='Проверьте наличие точки Lift-Setup'}};
-controls();update();updateEvents();
+controls();update();updateEvents();updateSound();
 </script></html>)HTML";
