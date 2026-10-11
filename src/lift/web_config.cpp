@@ -17,6 +17,7 @@
 namespace {
 WiFiManager manager;
 String apName, password;
+constexpr char SETUP_AP_PASSWORD[] = "Poiu0987";
 bool locked = true;
 bool serving = false;
 bool initialized = false;
@@ -37,7 +38,7 @@ void startPortal() {
   // to the household LAN. It is reachable only through the protected AP.
   WiFi.setAutoReconnect(false);
   WiFi.disconnect();
-  manager.startConfigPortal(apName.c_str(), password.c_str());
+  manager.startConfigPortal(apName.c_str(), SETUP_AP_PASSWORD);
   webPrintNetwork();
 }
 }
@@ -45,8 +46,9 @@ void startPortal() {
 bool webMotionLocked() { return maintenanceActive() || locked || webCalibrationBlocksCommands(); }
 
 void webPrintNetwork() {
-  Serial.printf("[WEB] Setup AP: %s password: %s\n", apName.c_str(), password.c_str());
-  Serial.printf("[WEB] Dashboard login: admin / same setup password; IP: %s channel: %d\n",
+  Serial.printf("[WEB] Setup AP: %s password: %s\n", apName.c_str(), SETUP_AP_PASSWORD);
+  Serial.printf("[WEB] Dashboard login: admin password: %s; IP: %s channel: %d\n",
+                password.c_str(),
                 WiFi.localIP().toString().c_str(), WiFi.channel());
   if (manager.getConfigPortalActive()) Serial.println("[WEB] Setup: http://192.168.4.1 (motion locked)");
 }
@@ -92,7 +94,7 @@ void webInit() {
   manager.setAPCallback([](WiFiManager*) { locked = true; });
   // Initial connection may wait up to eight seconds, before any commands
   // are serviced and before ESP-NOW is initialized.
-  manager.autoConnect(apName.c_str(), password.c_str());
+  manager.autoConnect(apName.c_str(), SETUP_AP_PASSWORD);
   WiFi.setAutoReconnect(false);
   initialized = true;
   webPrintNetwork();
