@@ -17,6 +17,9 @@
 #include "remote_comm.h"
 #include "remote_leds.h"
 #include "remote_ui.h"
+#include "device_pairing.h"
+#include "maintenance.h"
+#include <WiFi.h>
 
 namespace {
 
@@ -54,6 +57,8 @@ void setup() {
   Serial.println();
   LOG_I("[REMOTE] Boot");
 
+  pairingInit();
+  maintenanceInit("");
   buttonsInit();
   ledsInit();
 
@@ -76,6 +81,21 @@ void loop() {
 
   buttonsUpdate();
   commUpdate();
+  static char line[64];static size_t length=0;static bool overflow=false;
+  while(Serial.available()){
+    char c=Serial.read();if(c=='\r')continue;
+    if(c=='\n'){if(!overflow){line[length]=0;pairingCommand(line);}length=0;overflow=false;}
+    else if(length+1<sizeof(line)&&!overflow)line[length++]=c;else overflow=true;
+  }
+  bool released=true;for(uint8_t i=0;i<BTN_COUNT;++i)if(buttonPressed(static_cast<ButtonId>(i)))released=false;
+  const auto state=commStatus().state;
+  bool idle=commHasLink()&&released&&state!=STATE_MOVING&&state!=STATE_MANUAL_MOVE&&state!=STATE_HOMING&&state!=STATE_CALIB_HOMING_UP&&state!=STATE_CALIB_MOVING_DOWN;
+  maintenancePoll(idle);
+  if(maintenanceActive()){
+    g_controlsArmed=false;
+    if(now-g_lastDisplayMs>=500){g_lastDisplayMs=now;uiShowMessage("OTA - controls off",WiFi.status()==WL_CONNECTED?WiFi.localIP().toString().c_str():"Connecting Wi-Fi");}
+    ledsUpdate(false,commStatus());return;
+  }
 
   if (!commHasLink()) g_controlsArmed = false;
   if (!g_controlsArmed) {

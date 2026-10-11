@@ -14,6 +14,7 @@ struct WebSnapshot {
   uint32_t uptime, freeHeap;
   int32_t rssi;
   char ip[16];
+  char hostname[32],maintenance[160];
   uint32_t calibOwner, calibGeneration;
   uint8_t calibResult;
   bool calibCanStart, calibCanSave;
@@ -40,3 +41,7 @@ void dashboardMotionResult(uint8_t result);
 
 bool dashboardTakeSoundRequest(SoundRequest &request);
 void dashboardSoundResult(uint8_t result);
+
+bool dashboardTakeMaintenanceRequest(uint32_t &receivedAt);
+
+void dashboardMaintenanceResult(uint8_t result);

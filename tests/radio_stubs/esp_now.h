@@ -37,6 +37,7 @@ inline void esp_read_mac(uint8_t *mac,int) { memset(mac,1,6); }
 inline int esp_wifi_set_channel(uint8_t channel,int) { radio.channel=channel;return ESP_OK; }
 inline void esp_wifi_set_country(const wifi_country_t*) {}
 struct RadioWiFi {
+  void setHostname(const char*) {}
   void mode(int) {} void setAutoReconnect(bool) {} void disconnect() {}
   int channel() { return radio.channel; }
   std::string macAddress() { return "01:01:01:01:01:01"; }

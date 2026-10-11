@@ -15,6 +15,8 @@ bool accepting = false;
 bool published = false;
 uint8_t networkResult = 0; // 0: idle; 1: queued; 2: rejected by control loop.
 QueueHandle_t networkQueue = nullptr;
+QueueHandle_t maintenanceQueue = nullptr;
+uint8_t maintenanceResult=0;
 QueueHandle_t commandQueue = nullptr;
 bool stopPending = false;
 QueueHandle_t motionQueue = nullptr;
@@ -60,11 +62,12 @@ bool dashboardInit(const char *accessPassword) {
   password = accessPassword;
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
   journalBoot = String(esp_random(), HEX) + String(esp_random(), HEX);
+  maintenanceQueue = xQueueCreate(1,sizeof(uint32_t));
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
   motionQueue = xQueueCreate(1, sizeof(MotionRequest));
   soundQueue = xQueueCreate(1, sizeof(SoundRequest));
-  if (!networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
+  if (!maintenanceQueue || !networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -74,15 +77,16 @@ bool dashboardInit(const char *accessPassword) {
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     WebSnapshot s;
-    uint8_t result, settingsResult;
+    uint8_t result, settingsResult, otaResult;
     portENTER_CRITICAL(&snapshotMux);
     s = latest;
     result = networkResult;
     settingsResult = motionResult;
+    otaResult = maintenanceResult;
     portEXIT_CRITICAL(&snapshotMux);
-    char json[1536];
+    char json[1792];
     snprintf(json, sizeof(json),
-      "{\"state\":%u,\"floor\":%u,\"target\":%u,\"position\":%ld,\"known\":%s,"
+      "{\"hostname\":\"%s\",\"maintenance\":%s,\"maintenanceResult\":%u,\"state\":%u,\"floor\":%u,\"target\":%u,\"position\":%ld,\"known\":%s,"
       "\"error\":%u,\"top\":%s,\"speed\":%u,\"peer\":%s,\"channel\":%u,"
       "\"uptime\":%lu,\"ip\":\"%s\",\"token\":\"%s\",\"stationary\":%s,"
       "\"running\":%s,\"travel\":%ld,\"freeHeap\":%lu,\"rssi\":%ld,"
@@ -90,7 +94,7 @@ bool dashboardInit(const char *accessPassword) {
       "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s,"
       "\"motionRevision\":%lu,\"motionResult\":%u,\"motionStorage\":%u,"
       "\"motion\":{\"minimum\":%lu,\"maximum\":%lu,\"manual\":%lu,\"homing\":%lu,\"down\":%lu,\"acceleration\":%lu}}",
-      s.state,s.floor,s.target,(long)s.position,s.known?"true":"false",s.error,
+      s.hostname,s.maintenance[0]?s.maintenance:"{}",otaResult,s.state,s.floor,s.target,(long)s.position,s.known?"true":"false",s.error,
       s.top?"true":"false",s.speed,s.peer?"true":"false",s.channel,
       (unsigned long)s.uptime,s.ip,token.c_str(),s.stationary?"true":"false",
       s.running?"true":"false",(long)s.travel,(unsigned long)s.freeHeap,(long)s.rssi,
@@ -103,6 +107,17 @@ bool dashboardInit(const char *accessPassword) {
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+  });
+  server.on("/api/maintenance",HTTP_POST,[](AsyncWebServerRequest *request){
+    if(!authorize(request)||!csrfValid(request))return;
+    uint32_t now=millis();bool allowed;
+    portENTER_CRITICAL(&snapshotMux);
+    allowed=accepting&&!stopPending&&latest.stationary&&!latest.calibOwner&&networkResult!=1&&maintenanceResult!=1&&now-latest.uptime<1000;
+    if(allowed)maintenanceResult=1;
+    portEXIT_CRITICAL(&snapshotMux);
+    if(!allowed){request->send(409,"text/plain","Maintenance unavailable");return;}
+    if(xQueueSend(maintenanceQueue,&now,0)!=pdTRUE){dashboardMaintenanceResult(3);request->send(503,"text/plain","Queue busy");return;}
+    request->send(202,"text/plain","Queued");
   });
   server.on("/api/sound", HTTP_GET, [](AsyncWebServerRequest *request) {
     if(!authorize(request))return;
@@ -307,3 +322,7 @@ void dashboardMotionResult(uint8_t result) {
 
 bool dashboardTakeSoundRequest(SoundRequest &request){return soundQueue&&xQueueReceive(soundQueue,&request,0)==pdTRUE;}
 void dashboardSoundResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);soundResult=result;portEXIT_CRITICAL(&snapshotMux);}
+
+bool dashboardTakeMaintenanceRequest(uint32_t &receivedAt){return maintenanceQueue&&xQueueReceive(maintenanceQueue,&receivedAt,0)==pdTRUE;}
+
+void dashboardMaintenanceResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);maintenanceResult=result;portEXIT_CRITICAL(&snapshotMux);}

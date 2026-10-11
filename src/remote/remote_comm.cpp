@@ -3,6 +3,8 @@
 #include "espnow_compat.h"
 #include "log.h"
 #include <WiFi.h>
+#include "device_pairing.h"
+#include "maintenance.h"
 #include <esp_wifi.h>
 
 namespace {
@@ -30,12 +32,15 @@ bool addPeer(const uint8_t *mac) {
   memcpy(peer.peer_addr, mac, 6);
   peer.channel = 0; // Current radio channel, including while searching.
   peer.ifidx = WIFI_IF_STA;
+  pairingConfigurePeer(peer);
   return esp_now_add_peer(&peer) == ESP_OK;
 }
 
 ESPNOW_SEND_CB(onSent) { (void)status; }
 
 ESPNOW_RECV_CB(onRecv) {
+  if (maintenanceReceive(ESPNOW_RECV_SRC_MAC,data,len)) return;
+  if (!pairingAccept(ESPNOW_RECV_SRC_MAC)) return;
   if (len != sizeof(LiftStatus) || !protoHeaderValid(data)) return;
   const uint8_t *src = ESPNOW_RECV_SRC_MAC;
   if (!src) return;
@@ -49,6 +54,8 @@ ESPNOW_RECV_CB(onRecv) {
 }
 
 bool commInit() {
+  char hostname[32];deviceHostname(hostname,sizeof(hostname),"remote");
+  WiFi.setHostname(hostname);
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(false);
   WiFi.disconnect();
@@ -59,14 +66,16 @@ bool commInit() {
   esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) return false;
   esp_now_register_send_cb(onSent);
+  if(!pairingStartRadio())return false;
   esp_now_register_recv_cb(onRecv);
   ready = addPeer(BROADCAST_MAC);
+  if(pairingReady()){memcpy(baseMac,pairingMac(),6);baseKnown=addPeer(baseMac);ready=ready&&baseKnown;}
   LOG_I("[COMM] Remote MAC %s, channel search 1..13", WiFi.macAddress().c_str());
   return ready;
 }
 
 void commUpdate() {
-  if (!ready) return;
+  if (!ready || maintenanceActive()) return;
   LiftStatus received = {};
   uint8_t mac[6];
   unsigned long receivedAt = 0;
@@ -108,7 +117,7 @@ void commUpdate() {
 }
 
 void commSend(uint8_t type, uint8_t arg) {
-  if (!ready) return;
+  if (!ready || maintenanceActive()) return;
   // No broadcast movement commands while searching or after a stale status.
   if (type != CMD_DISCOVER && (!linkUp || millis() - lastStatus >= LINK_TIMEOUT_MS)) return;
   RemoteCommand cmd = {PROTO_MAGIC, PROTO_VERSION, type, arg, ++sequence};
@@ -116,5 +125,5 @@ void commSend(uint8_t type, uint8_t arg) {
   esp_now_send(dst, reinterpret_cast<uint8_t*>(&cmd), sizeof(cmd));
 }
 
-bool commHasLink() { return linkUp; }
+bool commHasLink() { return linkUp && !maintenanceActive(); }
 const LiftStatus &commStatus() { return status; }

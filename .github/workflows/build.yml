@@ -29,6 +29,9 @@ jobs:
           /tmp/sound-engine-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs tests/sound_manager_test.cpp -o /tmp/sound-manager-test
           /tmp/sound-manager-test
+          g++ -std=c++11 -Wall -Wextra -Werror tests/maintenance_policy_test.cpp -o /tmp/maintenance-test
+          /tmp/maintenance-test
+          python3 -m unittest discover -s tests -p "test_ota*.py"
           g++ -std=c++11 -Wall -Wextra -Werror tests/event_journal_test.cpp -o /tmp/event-journal-test
           /tmp/event-journal-test
           g++ -std=c++11 -Wall -Wextra -Werror -I tests/stubs -I src/common tests/state_journal_test.cpp -o /tmp/state-journal-test

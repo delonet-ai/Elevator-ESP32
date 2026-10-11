@@ -41,6 +41,7 @@ input[type=checkbox]{display:inline-block;width:auto;margin-right:10px}
 <div class="buttons"><button id="soundSave" disabled>Сохранить звук</button><button id="soundReload" class="secondary" disabled>Загрузить с базы</button><button id="soundTest" class="secondary" disabled>Проверить звук</button></div>
 <p id="soundMessage" role="status"></p><p id="soundEvent" class="muted"></p>
 <p class="muted">Отключение обычных сигналов сохраняет оповещения об ошибке, STOP и препятствии. Общее выключение или громкость 0 отключают весь звук. Звук не заменяет защиту лифта.</p></section>
+<section id="otaSection"><h2>Обновление по Wi-Fi</h2><p id="deviceName"></p><p>Режим обслуживания блокирует движение базы и управление пультом. Доступен только после остановки и вне калибровки.</p><button id="otaStart" disabled>Перейти в OTA: база и пульт</button><p id="otaState"></p><div id="otaLinks"></div></section>
 <section id="networkSection"><h2>Подключение к Wi-Fi</h2><p>Смена сети доступна после остановки, вне калибровки.</p>
 <button id="network" disabled>Настроить другую сеть</button><p id="message"></p></section>
 <section id="eventsSection"><h2>Журнал событий</h2><p class="muted">Последние 32 события с момента включения. Время — от запуска базы, позиция — в шагах. После перезапуска журнал очищается.</p>
@@ -224,7 +225,14 @@ el('motionSave').onclick=async()=>{
   }catch(e){motionPending=null;el('motionMessage').textContent='Сохранение не подтверждено: '+e.message;}
   controls();
 };
+el('otaStart').onclick=async()=>{
+  if(el('otaStart').disabled||!confirm('Отключить управление и перейти в режим обновления?'))return;
+  el('otaStart').disabled=true;
+  try{const r=await fetch('/api/maintenance',{method:'POST',headers:{'X-Lift-Token':token},signal:AbortSignal.timeout(2000)});if(!r.ok)throw Error();el('otaState').textContent='Запрос отправлен. Ожидание подтверждения базы…';}
+  catch(e){el('otaState').textContent='Вход в OTA не подтверждён. Проверьте состояние и повторите.';}
+};
 function controls(){
+  el('otaStart').disabled=!token||!snapshot?.stationary||!!snapshot?.calibOwner||session||snapshot?.networkResult===1||!!snapshot?.maintenance?.active||snapshot?.maintenanceResult===1;
   soundControls();
   const live=!!token&&!!snapshot, mine=live&&snapshot.calibOwner===owner;
   el('start').disabled=!live||!snapshot.calibCanStart||session||commandBusy;
@@ -271,6 +279,15 @@ async function update(){
       else if(!awaitingStart||Date.now()-awaitingStart>1000)stopSession();
     }
     if(s.networkResult===2)el('message').textContent='Смена сети отменена: лифт начал движение или запрос устарел';
+    el('deviceName').textContent=s.hostname||'';
+    el('otaLinks').replaceChildren();
+    if(s.maintenanceResult===3)el('otaState').textContent='Вход в OTA отклонён: база занята, сеть недоступна или запрос устарел.';
+    if(s.maintenance?.active){
+      el('otaState').textContent=s.maintenance.remoteReady?'Режим OTA. Пульт подключён к Wi-Fi.':s.maintenance.paired?'Режим OTA. Ожидание пульта (до минуты); если он не подключился, завершите режим и повторите.':'Режим OTA базы. Пульт ещё не привязан через USB.';
+      for(const [label,ip] of [['Обновить базу',s.ip],['Обновить пульт',s.maintenance.remoteReady?s.maintenance.remoteIp:'']]){
+        if(typeof ip==='string'&&/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)){const a=document.createElement('a');a.href='http://'+ip+':8080/';a.textContent=label+' ';a.target='_blank';a.rel='noopener';el('otaLinks').append(a);}
+      }
+    }
     el('connection').textContent='База доступна · '+s.ip;
     el('errorHelp').textContent=s.error?'Устраните причину ошибки перед сбросом. При неизвестной позиции потребуется восстановление по верхнему концевику.':s.state===8?'Калибровка сохранена, но после запуска положение кабины нужно восстановить.':'';
     const phase=s.calibOwner&&s.state===2?'Подъём до верхнего концевика':s.calibOwner&&s.state===3?(s.running?'Спуск. Отпустите кнопку для остановки':'Верх найден. Удерживайте вниз или сохраните нижнюю точку'):(results[s.calibResult]||states[s.state]);

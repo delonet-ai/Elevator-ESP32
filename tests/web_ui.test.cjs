@@ -36,6 +36,20 @@ function motionStatus(extra={}) { return {state:4,age:0,token:'boot-1',stationar
 
 const backup=(motion=defaultMotion,extra={})=>JSON.stringify({format:'elevator-esp32-motion',version:1,motion,...extra});
 
+test('OTA requires idle fresh status and exposes only confirmed remote address',async()=>{
+  const posts=[];let status=motionStatus({ip:'192.168.1.10',hostname:'lift-base-123456',maintenance:{active:false,paired:true}});
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push({url,options});return {ok:true,json:async()=>status};});
+  assert.equal(nodes.otaStart.disabled,false);await nodes.otaStart.onclick();
+  assert.equal(posts[0].url,'/api/maintenance');assert.equal(posts[0].options.headers['X-Lift-Token'],'boot-1');
+  status={...status,stationary:false,maintenance:{active:true,paired:true,remoteReady:false}};await nodes.refresh();
+  assert.equal(nodes.otaStart.disabled,true);assert.equal(nodes.otaLinks.children.length,1);
+  status.maintenance={active:true,paired:true,remoteReady:true,remoteIp:'192.168.1.11'};await nodes.refresh();
+  assert.equal(nodes.otaLinks.children[1].href,'http://192.168.1.11:8080/');
+  status.maintenance.remoteIp='javascript:alert(1)';await nodes.refresh();assert.equal(nodes.otaLinks.children.length,1);
+  status=motionStatus({maintenanceResult:3});await nodes.refresh();assert.match(nodes.otaState.textContent,/отклонён/);
+  status.age=2000;await nodes.refresh();assert.equal(nodes.otaStart.disabled,true);
+});
+
 test('sound without hardware permits configuration but cannot play a test',async()=>{
   const nodes=await load(async()=>({ok:true,json:async()=>motionStatus()}));
   assert.equal(nodes.soundSave.disabled,false);assert.equal(nodes.soundTest.disabled,true);

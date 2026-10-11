@@ -5,11 +5,13 @@
 #include "motor_controller.h"
 #include "log.h"
 #include "web_config.h"
+#include "device_pairing.h"
 
 namespace {
 
 char   g_line[65];
 size_t g_len = 0;
+bool g_discard = false;
 
 void printHelp() {
   Serial.println(F("Commands:"));
@@ -29,6 +31,8 @@ void printHelp() {
 }
 
 void handleCommand(const char *cmd) {
+  if(motorIsRunning()) { if(!strncmp(cmd,"PAIR ",5)){Serial.println("PAIR BUSY");return;} }
+  if(pairingCommand(cmd)) return;
 #ifdef BENCH_COMMANDS
   // Стендовые команды: только для проверки логики без собранного лифта.
   long arg = 0;
@@ -73,16 +77,19 @@ void serialUpdate() {
     if (c == '\r') continue;
 
     if (c == '\n') {
+      if(g_discard){g_discard=false;g_len=0;continue;}
       g_line[g_len] = '\0';
       if (g_len > 0) handleCommand(g_line);
       g_len = 0;
       continue;
     }
 
+    if(g_discard)continue;
     // Переполнение буфера отбрасывает строку целиком, чтобы «хвост»
     // не был выполнен как отдельная команда.
     if (g_len + 1 >= sizeof(g_line)) {
       g_len = 0;
+      g_discard=true;
       Serial.println(F("Input too long, discarded"));
       continue;
     }

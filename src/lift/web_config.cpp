@@ -10,6 +10,8 @@
 #include "web_calibration.h"
 #include "config.h"
 #include <Preferences.h>
+#include "device_pairing.h"
+#include "maintenance.h"
 #include <esp_system.h>
 
 namespace {
@@ -40,7 +42,7 @@ void startPortal() {
 }
 }
 
-bool webMotionLocked() { return locked || webCalibrationBlocksCommands(); }
+bool webMotionLocked() { return maintenanceActive() || locked || webCalibrationBlocksCommands(); }
 
 void webPrintNetwork() {
   Serial.printf("[WEB] Setup AP: %s password: %s\n", apName.c_str(), password.c_str());
@@ -74,6 +76,10 @@ void webInit() {
     Serial.println("[WEB] Dashboard initialization failed; motion remains locked");
     return;
   }
+  maintenanceInit(password.c_str());
+  char hostname[32];deviceHostname(hostname,sizeof(hostname),"base");
+  manager.setHostname(hostname);
+  WiFi.setHostname(hostname);
   manager.setDebugOutput(false);
   manager.setConfigPortalBlocking(false);
   manager.setConnectTimeout(8);
@@ -102,6 +108,12 @@ void webUpdate() {
   if (calibration != lastCalibration) journalRecord(EventKind::Calibration, calibration);
   observed = true; lastRunning = running; lastTop = top; lastCalibration = calibration;
   if (!initialized) return;
+  maintenancePoll(stationary() && !locked && !webCalibrationOwner());
+  uint32_t otaRequest;
+  if(dashboardTakeMaintenanceRequest(otaRequest)){
+    const bool accepted=!webMotionLocked()&&stationary()&&millis()-otaRequest<=2000&&maintenanceStart();
+    dashboardMaintenanceResult(accepted?2:3);
+  }
   const unsigned long now = millis();
   static unsigned long lastSnapshot = 0;
   if (now - lastSnapshot >= 100) {
@@ -124,7 +136,9 @@ void webUpdate() {
     snapshot.remoteSeen = commRemoteSeen();
     snapshot.remoteOnline = commRemoteOnline();
     snapshot.remoteAgeMs = commRemoteAgeMs();
-    snapshot.stationary = stationary() && !locked;
+    snapshot.stationary = stationary() && !locked && !maintenanceActive();
+    deviceHostname(snapshot.hostname,sizeof(snapshot.hostname),"base");
+    maintenanceInfo(snapshot.maintenance,sizeof(snapshot.maintenance));
     snapshot.calibOwner = webCalibrationOwner();
     snapshot.calibGeneration = webCalibrationGeneration();
     snapshot.calibResult = webCalibrationResult();
@@ -142,6 +156,7 @@ void webUpdate() {
     dashboardPublish(snapshot);
   }
 
+  if(maintenanceActive())return;
   uint32_t requestedAt;
   if (dashboardTakeNetworkRequest(requestedAt)) {
     // Recheck in the control loop: the lift may have started since the

@@ -6,6 +6,8 @@
 #include "espnow_compat.h"
 #include "log.h"
 #include "remote_presence.h"
+#include "device_pairing.h"
+#include "maintenance.h"
 #include "event_journal.h"
 
 #include <WiFi.h>
@@ -44,6 +46,7 @@ bool addPeer(const uint8_t *mac) {
   peer.channel = 0; // Follow the station/AP channel chosen by the router.
   peer.encrypt = false;
   peer.ifidx   = WIFI_IF_STA;
+  pairingConfigurePeer(peer);
 
   esp_err_t err = esp_now_add_peer(&peer);
   if (err != ESP_OK) {
@@ -59,6 +62,8 @@ ESPNOW_SEND_CB(onSent) {
 }
 
 ESPNOW_RECV_CB(onRecv) {
+  if (maintenanceReceive(ESPNOW_RECV_SRC_MAC,data,len)) return;
+  if (!pairingAccept(ESPNOW_RECV_SRC_MAC)) return;
   if (len != (int)sizeof(RemoteCommand)) return;
   if (!protoHeaderValid(data)) return;
 
@@ -129,11 +134,13 @@ bool commInit() {
   }
 
   esp_now_register_send_cb(onSent);
+  if(!pairingStartRadio())return false;
   esp_now_register_recv_cb(onRecv);
 
   // Широковещательный peer нужен, чтобы отвечать пульту, который ещё
   // не знает MAC базы.
   addPeer(BROADCAST_MAC);
+  if(pairingReady()){memcpy(g_remoteMac,pairingMac(),6);g_haveRemoteMac=true;g_peerAdded=addPeer(g_remoteMac);}
 
   LOG_I("[COMM] ESP-NOW ready");
   return true;

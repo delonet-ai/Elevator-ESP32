@@ -26,6 +26,7 @@
 #include "web_calibration.h"
 #include "motion_settings.h"
 #include "sound_manager.h"
+#include "device_pairing.h"
 
 static unsigned long g_lastTick = 0;
 
@@ -35,6 +36,7 @@ void setup() {
   Serial.println();
   LOG_I("[LIFT] Boot");
 
+  pairingInit();
   ioInit();
   ioUpdate();  // получить достоверное состояние концевика до старта автомата
 
