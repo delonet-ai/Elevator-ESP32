@@ -12,17 +12,19 @@ async function load(fetch,fetchEvents=async()=>({ok:true,json:async()=>({boot:'t
   const nodes = {};
   const events = {};
   const downloads=[];
+  let focused=true;
   function node(tag) { return {textContent:'', children:[], click(){if(tag==='a')downloads.push({href:this.href,download:this.download});},remove(){},setPointerCapture(){}, replaceChildren(){this.children=[];}, append(...v){this.children.push(...v);}}; }
   const context = vm.createContext({fetch:(url,options)=>url==='/api/events'?fetchEvents(url,options):url==='/api/sound'&&!options?.method?fetchSound(url,options):fetch(url,options), AbortSignal, URLSearchParams, Uint32Array,
     crypto:{getRandomValues:a=>{a[0]=42;return a;}}, confirm:()=>true, setTimeout:()=>{}, clearTimeout:()=>{},
     window:{addEventListener:(name,fn)=>events[name]=fn},
-    document:{body:node(),addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
+    document:{hasFocus:()=>focused,body:node(),addEventListener:(name,fn)=>events[name]=fn, hidden:false,getElementById:id=>nodes[id]??(nodes[id]=node()), createElement:node}});
   vm.runInContext(script, context);
   await new Promise(resolve=>setImmediate(resolve));
   nodes.refresh = () => vm.runInContext('update()', context);
   nodes.refreshSound = () => vm.runInContext('updateSound()', context);
   nodes.refreshEvents = () => vm.runInContext('updateEvents()', context);
-  nodes.event = name => events[name]();
+  nodes.event = name => {if(name==='blur')focused=false;return events[name]();};
+  nodes.restoredFocusBlur = () => {focused=true;return events.blur();};
   nodes.downloads=downloads;
   nodes.importFile=async(text,size=Buffer.byteLength(text))=>{
     nodes.motionFile.files=[{size,text:async()=>text}];
@@ -409,4 +411,13 @@ test('loss after a successful update clears permission to configure',async()=>{
 test('a request rejected by the control loop is reported instead of being deferred',async()=>{
   const nodes=await load(async()=>({ok:true,json:async()=>({state:5,age:0,stationary:false,networkResult:2,token:'secret'})}));
   assert.match(nodes.message.textContent,/Смена сети отменена/);
+});
+
+
+test('delayed blur from confirmation does not stop calibration after focus returns',async()=>{
+  const posts=[];
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push({url,options});return {ok:true,json:async()=>motionStatus({calibGeneration:1,calibCanStart:true}),text:async()=> 'Queued'};});
+  await nodes.start.onclick();nodes.restoredFocusBlur();
+  assert.equal(posts.some(p=>p.url==='/api/stop'),false);
+  nodes.event('blur');assert.equal(posts.at(-1).url,'/api/stop');
 });

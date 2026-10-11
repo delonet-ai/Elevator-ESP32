@@ -318,7 +318,8 @@ el('stop').onclick=()=>{stopSession();el('calibMessage').textContent='Остан
 el('down').onpointerdown=e=>{if(el('down').disabled||!session||heldDown)return;e.preventDefault();el('down').setPointerCapture(e.pointerId);heldDown=true;controls();sendAction('down').catch(()=>stopSession());};
 function releaseDown(){if(!heldDown)return;heldDown=false;controls();sendAction('pause').catch(()=>stopSession());}
 el('down').onpointerup=releaseDown;el('down').onpointercancel=releaseDown;el('down').onlostpointercapture=releaseDown;
-window.addEventListener('blur',()=>{if(session)stopSession();});
+// A confirm dialog can queue a blur event delivered after focus has returned.
+window.addEventListener('blur',()=>{if(session&&!document.hasFocus())stopSession();});
 window.addEventListener('pagehide',()=>{if(session)stopSession();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&session)stopSession();});
 el('network').onclick=async()=>{if(!token||el('network').disabled||!confirm('Перейти в режим настройки сети?'))return;try{const r=await fetch('/api/network',{method:'POST',headers:{'X-Lift-Token':token}});el('message').textContent=await r.text();if(r.ok)el('network').disabled=true}catch(e){el('message').textContent='Проверьте наличие точки Lift-Setup'}};
