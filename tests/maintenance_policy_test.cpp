@@ -3,8 +3,9 @@
 #include "../src/common/ota_package.h"
 int main(){
   uint8_t nonce[16]={1};MaintenanceMessage m;m.type=2;m.ota=1;memcpy(m.nonce,nonce,16);
-  strcpy(m.ssid,"Home");strcpy(m.admin,"123456789012");
+  strcpy(m.ssid,"Home");strcpy(m.admin,"Poiu0987");
   assert(maintenanceResponseValid(m,nonce,100,101));
+  strcpy(m.admin,"short");assert(!maintenanceResponseValid(m,nonce,100,101));strcpy(m.admin,"Poiu0987");
   assert(!maintenanceResponseValid(m,nonce,100,3100));
   assert(!maintenanceResponseValid(m,nonce,0,101)); // consumed challenge / replay
   m.nonce[0]^=1;assert(!maintenanceResponseValid(m,nonce,100,101));m.nonce[0]^=1;

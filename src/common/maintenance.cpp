@@ -97,7 +97,7 @@ void setupServer(){
     }else if(u.status==UPLOAD_FILE_ABORTED){uploadTransaction=false;uploadOK=false;failUpload("Upload interrupted");}
   });
 }
-void startServer(){if(serving||accessPassword.length()<12)return;csrf=String(esp_random(),HEX)+String(esp_random(),HEX);server.begin();serving=true;Serial.printf("[OTA] http://%s:8080/ (admin, same base password)\n",WiFi.localIP().toString().c_str());}
+void startServer(){if(serving||accessPassword.length()<8)return;csrf=String(esp_random(),HEX)+String(esp_random(),HEX);server.begin();serving=true;Serial.printf("[OTA] http://%s:8080/ (admin, same base password)\n",WiFi.localIP().toString().c_str());}
 }
 void maintenanceInit(const char *password){
   Serial.printf("[OTA] Target %s\n",targetMarker);

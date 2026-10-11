@@ -59,16 +59,12 @@ void webInit() {
     Serial.println("[WEB] Cannot open credentials storage; motion remains locked");
     return;
   }
-  password = prefs.getString("password", "");
-  if (password.length() < 12) {
-    char generated[17];
-    snprintf(generated, sizeof(generated), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-    password = generated;
-    if (!prefs.putString("password", password)) {
-      prefs.end();
-      Serial.println("[WEB] Cannot save setup password; motion remains locked");
-      return;
-    }
+  password = SETUP_AP_PASSWORD;
+  if (prefs.getString("password", "") != password &&
+      !prefs.putString("password", password)) {
+    prefs.end();
+    Serial.println("[WEB] Cannot save access password; motion remains locked");
+    return;
   }
   prefs.end();
   char suffix[7];
