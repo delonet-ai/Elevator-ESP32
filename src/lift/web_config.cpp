@@ -13,6 +13,7 @@
 #include "device_pairing.h"
 #include "maintenance.h"
 #include <esp_system.h>
+#include <mbedtls/platform_util.h>
 
 namespace {
 WiFiManager manager;
@@ -134,6 +135,8 @@ void webUpdate() {
     snapshot.remoteSeen = commRemoteSeen();
     snapshot.remoteOnline = commRemoteOnline();
     snapshot.remoteAgeMs = commRemoteAgeMs();
+    snapshot.maintenanceActive=maintenanceActive();
+    snapshot.paired=pairingReady();
     snapshot.stationary = stationary() && !locked && !maintenanceActive();
     deviceHostname(snapshot.hostname,sizeof(snapshot.hostname),"base");
     maintenanceInfo(snapshot.maintenance,sizeof(snapshot.maintenance));
@@ -154,6 +157,12 @@ void webUpdate() {
     dashboardPublish(snapshot);
   }
 
+  PairRequest pairRequest;
+  if(dashboardTakePairRequest(pairRequest)){
+    const bool allowed=maintenanceActive()&&!pairingReady()&&stationary()&&!webCalibrationOwner()&&millis()-pairRequest.receivedAt<=2000;
+    dashboardPairResult(!allowed?3:pairingStore(pairRequest.mac,pairRequest.key)?2:4);
+    mbedtls_platform_zeroize(&pairRequest,sizeof(pairRequest));
+  }
   if(maintenanceActive())return;
   uint32_t requestedAt;
   if (dashboardTakeNetworkRequest(requestedAt)) {

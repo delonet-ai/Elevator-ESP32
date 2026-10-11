@@ -10,6 +10,7 @@
 struct WebSnapshot {
   uint8_t state, floor, target, error, speed, channel;
   bool known, top, peer, stationary, running;
+  bool maintenanceActive, paired;
   int32_t position, travel;
   uint32_t uptime, freeHeap;
   int32_t rssi;
@@ -45,3 +46,7 @@ void dashboardSoundResult(uint8_t result);
 bool dashboardTakeMaintenanceRequest(uint32_t &receivedAt);
 
 void dashboardMaintenanceResult(uint8_t result);
+
+struct PairRequest {char mac[13],key[33];uint32_t receivedAt;};
+bool dashboardTakePairRequest(PairRequest &request);
+void dashboardPairResult(uint8_t result);

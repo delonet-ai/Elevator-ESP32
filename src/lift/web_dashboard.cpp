@@ -17,6 +17,8 @@ uint8_t networkResult = 0; // 0: idle; 1: queued; 2: rejected by control loop.
 QueueHandle_t networkQueue = nullptr;
 QueueHandle_t maintenanceQueue = nullptr;
 uint8_t maintenanceResult=0;
+QueueHandle_t pairQueue=nullptr;
+uint8_t pairResult=0;
 QueueHandle_t commandQueue = nullptr;
 bool stopPending = false;
 QueueHandle_t motionQueue = nullptr;
@@ -62,12 +64,13 @@ bool dashboardInit(const char *accessPassword) {
   password = accessPassword;
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
   journalBoot = String(esp_random(), HEX) + String(esp_random(), HEX);
+  pairQueue=xQueueCreate(1,sizeof(PairRequest));
   maintenanceQueue = xQueueCreate(1,sizeof(uint32_t));
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
   motionQueue = xQueueCreate(1, sizeof(MotionRequest));
   soundQueue = xQueueCreate(1, sizeof(SoundRequest));
-  if (!maintenanceQueue || !networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
+  if (!pairQueue || !maintenanceQueue || !networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -107,6 +110,28 @@ bool dashboardInit(const char *accessPassword) {
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+  });
+  server.on("/api/pair",HTTP_GET,[](AsyncWebServerRequest *request){
+    if(!authorize(request))return;
+    portENTER_CRITICAL(&snapshotMux);uint8_t result=pairResult;portEXIT_CRITICAL(&snapshotMux);
+    char json[24];snprintf(json,sizeof(json),"{\"result\":%u}",result);
+    auto *response=request->beginResponse(200,"application/json",json);response->addHeader("Cache-Control","no-store");request->send(response);
+  });
+  server.on("/api/pair",HTTP_POST,[](AsyncWebServerRequest *request){
+    if(!authorize(request)||!csrfValid(request))return;
+    if(!request->hasParam("mac",true)||!request->hasParam("key",true)){request->send(400,"text/plain","Invalid pairing");return;}
+    const String mac=request->getParam("mac",true)->value(),key=request->getParam("key",true)->value();
+    if(mac.length()!=12||key.length()!=32){request->send(400,"text/plain","Invalid pairing");return;}
+    for(char ch:mac)if(!isxdigit(static_cast<unsigned char>(ch))){request->send(400,"text/plain","Invalid MAC");return;}
+    for(char ch:key)if(!isxdigit(static_cast<unsigned char>(ch))){request->send(400,"text/plain","Invalid key");return;}
+    PairRequest command={};mac.toCharArray(command.mac,sizeof(command.mac));key.toCharArray(command.key,sizeof(command.key));command.receivedAt=millis();
+    portENTER_CRITICAL(&snapshotMux);
+    bool allowed=accepting&&!stopPending&&latest.maintenanceActive&&!latest.paired&&!latest.running&&!latest.calibOwner&&pairResult!=1&&pairResult!=2&&command.receivedAt-latest.uptime<1000;
+    if(allowed)pairResult=1;
+    portEXIT_CRITICAL(&snapshotMux);
+    if(!allowed){request->send(409,"text/plain","Pairing requires idle unpaired maintenance mode");return;}
+    if(xQueueSend(pairQueue,&command,0)!=pdTRUE){dashboardPairResult(3);request->send(503,"text/plain","Queue busy");return;}
+    request->send(202,"text/plain","Queued");
   });
   server.on("/api/maintenance",HTTP_POST,[](AsyncWebServerRequest *request){
     if(!authorize(request)||!csrfValid(request))return;
@@ -326,3 +351,6 @@ void dashboardSoundResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);sound
 bool dashboardTakeMaintenanceRequest(uint32_t &receivedAt){return maintenanceQueue&&xQueueReceive(maintenanceQueue,&receivedAt,0)==pdTRUE;}
 
 void dashboardMaintenanceResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);maintenanceResult=result;portEXIT_CRITICAL(&snapshotMux);}
+
+bool dashboardTakePairRequest(PairRequest &request){return pairQueue&&xQueueReceive(pairQueue,&request,0)==pdTRUE;}
+void dashboardPairResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);pairResult=result;portEXIT_CRITICAL(&snapshotMux);}

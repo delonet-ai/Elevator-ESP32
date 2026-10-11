@@ -15,6 +15,12 @@ const uint8_t *pairingMac(){return pair.mac;}
 bool pairingAccept(const uint8_t *mac){return mac&&(!valid||!memcmp(mac,pair.mac,6));}
 void pairingConfigurePeer(esp_now_peer_info_t &peer){if(valid&&!memcmp(peer.peer_addr,pair.mac,6)){peer.encrypt=true;memcpy(peer.lmk,pair.key,16);}}
 bool pairingStartRadio(){return !valid||esp_now_set_pmk(pair.key)==ESP_OK;}
+bool pairingStore(const char *macHex,const char *keyHex){
+  Pair next={};next.version=1;
+  if(strlen(macHex)!=12||strlen(keyHex)!=32||!decode(macHex,next.mac,6)||!decode(keyHex,next.key,16)||!sane(next))return false;
+  Preferences p;bool saved=false;if(p.begin("lift-pair",false)){saved=p.putBytes("pair",&next,sizeof(next))==sizeof(next);p.end();}
+  memset(&next,0,sizeof(next));return saved;
+}
 bool pairingCommand(const char *line){
   if(strncmp(line,"PAIR ",5))return false;
   Pair next={};next.version=1;
