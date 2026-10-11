@@ -1,0 +1,24 @@
+#pragma once
+#include <Arduino.h>
+
+// ESP-NOW на стороне базы.
+//
+// Колбэк приёма выполняется в задаче Wi-Fi, поэтому он не трогает автомат
+// состояний напрямую (раньше трогал — это была гонка с smTick() в loop()).
+// Пакет только проверяется и кладётся в очередь; разбирает её commPoll()
+// из основного цикла.
+
+bool commInit();
+
+// Разобрать накопившиеся команды. Вызывать из loop().
+void commPoll();
+
+// Отправить статус пульту, если подошёл срок. Вызывать из loop().
+void commSendStatusIfDue();
+
+// Известен ли адрес пульта.
+bool commHasPeer();
+// Fresh received traffic, not simply a registered ESP-NOW peer.
+bool commRemoteSeen();
+bool commRemoteOnline();
+uint32_t commRemoteAgeMs();

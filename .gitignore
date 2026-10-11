@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+.DS_Store
+*.bin
+*.elf
+compile_commands.json
+.private/
+*.liftota
+__pycache__/

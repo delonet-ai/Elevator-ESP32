@@ -1,0 +1,225 @@
+#include "web_config.h"
+#include "state_machine.h"
+#include "motor_controller.h"
+#include "io_manager.h"
+#include "comm_lift.h"
+#include <WiFi.h>
+#include <WiFiManager.h>
+#include "web_dashboard.h"
+#include "floor_manager.h"
+#include "web_calibration.h"
+#include "config.h"
+#include <Preferences.h>
+#include "device_pairing.h"
+#include "maintenance.h"
+#include <esp_system.h>
+#include <mbedtls/platform_util.h>
+
+namespace {
+WiFiManager manager;
+String apName, password;
+constexpr char SETUP_AP_PASSWORD[] = "Poiu0987";
+bool locked = true;
+bool serving = false;
+bool initialized = false;
+unsigned long disconnectedAt = 0;
+
+bool stationary() {
+  const LiftState state = smGetState();
+  return !motorIsRunning() && state != STATE_MOVING &&
+         state != STATE_MANUAL_MOVE && state != STATE_HOMING &&
+         state != STATE_CALIB_HOMING_UP && state != STATE_CALIB_MOVING_DOWN;
+}
+
+void startPortal() {
+  locked = true;
+  dashboardStop();
+  serving = false;
+  // Configuration portal must not expose unauthenticated WiFiManager routes
+  // to the household LAN. It is reachable only through the protected AP.
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect();
+  manager.startConfigPortal(apName.c_str(), SETUP_AP_PASSWORD);
+  webPrintNetwork();
+}
+}
+
+bool webMotionLocked() { return maintenanceActive() || locked || webCalibrationBlocksCommands(); }
+
+void webPrintNetwork() {
+  Serial.printf("[WEB] Setup AP: %s password: %s\n", apName.c_str(), SETUP_AP_PASSWORD);
+  Serial.printf("[WEB] Dashboard login: admin password: %s; IP: %s channel: %d\n",
+                password.c_str(),
+                WiFi.localIP().toString().c_str(), WiFi.channel());
+  if (manager.getConfigPortalActive()) Serial.println("[WEB] Setup: http://192.168.4.1 (motion locked)");
+}
+
+void webInit() {
+  Preferences prefs;
+  if (!prefs.begin("lift-web", false)) {
+    Serial.println("[WEB] Cannot open credentials storage; motion remains locked");
+    return;
+  }
+  password = SETUP_AP_PASSWORD;
+  if (prefs.getString("password", "") != password &&
+      !prefs.putString("password", password)) {
+    prefs.end();
+    Serial.println("[WEB] Cannot save access password; motion remains locked");
+    return;
+  }
+  prefs.end();
+  char suffix[7];
+  snprintf(suffix, sizeof(suffix), "%06lx", (unsigned long)(ESP.getEfuseMac() & 0xffffff));
+  apName = String("Lift-Setup-") + suffix;
+  if (!dashboardInit(password.c_str())) {
+    Serial.println("[WEB] Dashboard initialization failed; motion remains locked");
+    return;
+  }
+  maintenanceInit(password.c_str());
+  char hostname[32];deviceHostname(hostname,sizeof(hostname),"base");
+  manager.setHostname(hostname);
+  WiFi.setHostname(hostname);
+  manager.setDebugOutput(false);
+  manager.setConfigPortalBlocking(false);
+  manager.setConnectTimeout(8);
+  manager.setSaveConnectTimeout(8);
+  manager.setWiFiAutoReconnect(false);
+  manager.setConfigPortalTimeout(0);
+  std::vector<const char*> menu = {"wifi", "info"};
+  manager.setMenu(menu);
+  WiFi.setAutoReconnect(false);
+  manager.setAPCallback([](WiFiManager*) { locked = true; });
+  // Initial connection may wait up to eight seconds, before any commands
+  // are serviced and before ESP-NOW is initialized.
+  manager.autoConnect(apName.c_str(), SETUP_AP_PASSWORD);
+  WiFi.setAutoReconnect(false);
+  initialized = true;
+  webPrintNetwork();
+}
+
+void webUpdate() {
+  static bool observed = false, lastRunning = false, lastTop = false;
+  static uint8_t lastCalibration = 0;
+  const bool running = motorIsRunning(), top = ioTopSwitchActive();
+  const uint8_t calibration = webCalibrationResult();
+  if (!observed || running != lastRunning) journalRecord(EventKind::Motor, running);
+  if (!observed || top != lastTop) journalRecord(EventKind::Top, top);
+  if (calibration != lastCalibration) journalRecord(EventKind::Calibration, calibration);
+  observed = true; lastRunning = running; lastTop = top; lastCalibration = calibration;
+  if (!initialized) return;
+  maintenancePoll(stationary() && !locked && !webCalibrationOwner());
+  uint32_t otaRequest;
+  if(dashboardTakeMaintenanceRequest(otaRequest)){
+    const bool accepted=!webMotionLocked()&&stationary()&&millis()-otaRequest<=2000&&maintenanceStart();
+    dashboardMaintenanceResult(accepted?2:3);
+  }
+  const unsigned long now = millis();
+  static unsigned long lastSnapshot = 0;
+  if (now - lastSnapshot >= 100) {
+    lastSnapshot = now;
+    WebSnapshot snapshot = {};
+    snapshot.journal = journalSnapshot();
+    snapshot.sound = soundSnapshot();
+    snapshot.motion = motionSettings();
+    snapshot.motionRevision = motionRevision();
+    snapshot.motionStorage = motionStorageStatus();
+    snapshot.state = smGetState();
+    snapshot.floor = smGetCurrentFloor();
+    snapshot.target = smGetTargetFloor();
+    snapshot.error = smGetError();
+    snapshot.speed = ioSpeedPercent();
+    snapshot.channel = WiFi.channel();
+    snapshot.known = smPositionKnown();
+    snapshot.top = ioTopSwitchActive();
+    snapshot.peer = commHasPeer();
+    snapshot.remoteSeen = commRemoteSeen();
+    snapshot.remoteOnline = commRemoteOnline();
+    snapshot.remoteAgeMs = commRemoteAgeMs();
+    snapshot.maintenanceActive=maintenanceActive();
+    snapshot.paired=pairingReady();
+    snapshot.stationary = stationary() && !locked && !maintenanceActive();
+    deviceHostname(snapshot.hostname,sizeof(snapshot.hostname),"base");
+    maintenanceInfo(snapshot.maintenance,sizeof(snapshot.maintenance));
+    snapshot.calibOwner = webCalibrationOwner();
+    snapshot.calibGeneration = webCalibrationGeneration();
+    snapshot.calibResult = webCalibrationResult();
+    snapshot.calibCanStart = !webMotionLocked() && !motorIsRunning() &&
+      (stationary() || smGetState() == STATE_CALIB_MOVING_DOWN);
+    snapshot.calibCanSave = snapshot.calibOwner && smGetState() == STATE_CALIB_MOVING_DOWN &&
+      !motorIsRunning() && smGetPosition() <= -(TOP_MARGIN_STEPS + MIN_TRAVEL_STEPS);
+    snapshot.running = motorIsRunning();
+    snapshot.position = smGetPosition();
+    snapshot.travel = floorGetFullTravelSteps();
+    snapshot.middleEnabled = floorLegacyMiddleEnabled();
+    snapshot.middleCustom = floorMiddleCustom();
+    snapshot.middlePosition = floorGetPositionForFloor(2);
+    snapshot.floorRevision = floorRevision();
+    snapshot.middleCanSave = snapshot.state == STATE_IDLE && snapshot.known &&
+      snapshot.stationary && !snapshot.calibOwner && floorCanSaveMiddle(snapshot.position);
+    snapshot.uptime = now;
+    snapshot.freeHeap = ESP.getFreeHeap();
+    snapshot.rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+    snprintf(snapshot.ip, sizeof(snapshot.ip), "%s", WiFi.localIP().toString().c_str());
+    dashboardPublish(snapshot);
+  }
+
+  PairRequest pairRequest;
+  if(dashboardTakePairRequest(pairRequest)){
+    const bool allowed=maintenanceActive()&&!pairingReady()&&stationary()&&!webCalibrationOwner()&&millis()-pairRequest.receivedAt<=2000;
+    dashboardPairResult(!allowed?3:pairingStore(pairRequest.mac,pairRequest.key)?2:4);
+    mbedtls_platform_zeroize(&pairRequest,sizeof(pairRequest));
+  }
+  MiddleRequest middleRequest;
+  if (dashboardTakeMiddleRequest(middleRequest)) {
+    dashboardMiddleResult(floorApplyMiddle(middleRequest, millis(),
+      !webMotionLocked() && stationary() && smGetState() == STATE_IDLE && smPositionKnown() &&
+      WiFi.status() == WL_CONNECTED, smGetPosition()));
+  }
+  if(maintenanceActive())return;
+  uint32_t requestedAt;
+  if (dashboardTakeNetworkRequest(requestedAt)) {
+    // Recheck in the control loop: the lift may have started since the
+    // browser read its snapshot. Never defer a rejected request until idle.
+    if (!locked && stationary() && millis() - requestedAt <= 2000) startPortal();
+    else dashboardRejectNetworkRequest();
+  }
+  MotionRequest motionRequest;
+  if (dashboardTakeMotionRequest(motionRequest)) {
+    const uint8_t result = motionApply(motionRequest, millis(),
+      !webMotionLocked() && stationary() && WiFi.status() == WL_CONNECTED);
+    if (result == 2) {
+      motorSetAccel(motionSettings().acceleration);
+      motorSetSpeedLimit(motionSettings().minimum +
+        (motionSettings().maximum - motionSettings().minimum) * (ioSpeedPercent() / 100.0f));
+    }
+    journalRecord(EventKind::MotionSettings, result);
+    dashboardMotionResult(result);
+  }
+  SoundRequest soundRequest;
+  if (dashboardTakeSoundRequest(soundRequest)) {
+    dashboardSoundResult(soundApply(soundRequest, millis(),
+      !webMotionLocked() && stationary() && WiFi.status() == WL_CONNECTED));
+  }
+  // Provisioning may block; the dashboard itself runs in the HTTP task.
+  if (!stationary()) return;
+  if (manager.getConfigPortalActive()) {
+    locked = true;
+    manager.process();
+    return;
+  }
+  locked = false;
+  if (WiFi.status() == WL_CONNECTED) {
+    disconnectedAt = 0;
+    if (!serving) {
+      dashboardStart();
+      serving = true;
+      webPrintNetwork();
+    }
+  } else {
+    if (disconnectedAt == 0) disconnectedAt = now;
+    if (now - disconnectedAt > 15000) {
+      disconnectedAt = 0;
+      startPortal();
+    }
+  }
+}
