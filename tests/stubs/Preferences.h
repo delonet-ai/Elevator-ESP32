@@ -14,6 +14,7 @@ class Preferences {
 public:
   bool begin(const char*, bool) { return !nvs.failOpen; }
   void end() {}
+  bool isKey(const char*) { return !nvs.blob.empty(); }
   size_t getBytesLength(const char*) { return nvs.blob.size(); }
   size_t getBytes(const char*, void *out, size_t size) {
     if (size != nvs.blob.size()) return 0;

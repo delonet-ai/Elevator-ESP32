@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "web_control_policy.h"
 #include "motion_settings.h"
+#include "floor_manager.h"
 #include "event_journal.h"
 #include "sound_manager.h"
 
@@ -11,7 +12,9 @@ struct WebSnapshot {
   uint8_t state, floor, target, error, speed, channel;
   bool known, top, peer, stationary, running;
   bool maintenanceActive, paired;
-  int32_t position, travel;
+  int32_t position, travel, middlePosition;
+  uint32_t floorRevision;
+  bool middleEnabled, middleCustom, middleCanSave;
   uint32_t uptime, freeHeap;
   int32_t rssi;
   char ip[16];
@@ -50,3 +53,6 @@ void dashboardMaintenanceResult(uint8_t result);
 struct PairRequest {char mac[13],key[33];uint32_t receivedAt;};
 bool dashboardTakePairRequest(PairRequest &request);
 void dashboardPairResult(uint8_t result);
+
+bool dashboardTakeMiddleRequest(MiddleRequest &request);
+void dashboardMiddleResult(uint8_t result);

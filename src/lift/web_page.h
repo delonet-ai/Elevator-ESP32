@@ -22,6 +22,10 @@ input[type=checkbox]{display:inline-block;width:auto;margin-right:10px}
 <button id="save" disabled>Сохранить низ</button>
 <button id="reset" class="secondary" disabled>Сбросить калибровку</button></div>
 <p id="calibMessage"></p><p class="muted">При уходе со страницы или потере связи веб-калибровка останавливается. Веб-СТОП не заменяет физическую аварийную кнопку. Удерживающий момент мотора сохраняется.</p></section>
+<section id="middleSection"><h2>Второй этаж · временный режим</h2>
+<p>После калибровки низа и верха подведите кабину кнопками ↑/↓ пульта к уровню второго этажа. Отпустите кнопку, дождитесь полной остановки и сохраните точку.</p>
+<p id="middleState">Ожидание данных</p><div class="buttons"><button id="middleSave" disabled>Сохранить здесь второй этаж</button><button id="middleReset" class="secondary" disabled>Вернуть середину хода</button></div>
+<p id="middleMessage" role="status"></p><p class="muted">Точка сохраняется после перезагрузки. Новая калибровка низа и верха сбрасывает её. Это позиция по шагам: проскальзывание и неравномерная намотка по-прежнему влияют на остановку. При переходе на датчики этот режим отключим.</p></section>
 <section id="motionSection"><h2>Движение</h2><p>Скорости в шагах/с, ускорение в шагах/с². Регулятор на базе выбирает скорость поездки между минимумом и максимумом. Ручной ход и калибровка используют отдельные скорости.</p><p class="muted">Пределы крутилки: 50–10 000 шагов/с. Исходный диапазон — 200–2000. Допустимая для механики скорость определяется при проверке.</p>
 <label>Крутилка: скорость в минимальном положении<input id="minimum" type="number" min="50" max="10000" step="1" disabled></label>
 <label>Крутилка: скорость в максимальном положении<input id="maximum" type="number" min="50" max="10000" step="1" disabled></label>
@@ -52,6 +56,41 @@ const results=['','Поиск верхней точки запущен','Спу�
 const owner=crypto.getRandomValues(new Uint32Array(1))[0]||1;
 let token='',snapshot=null,sequence=0,session=false,generation=0,heldDown=false,awaitingStart=0,commandBusy=false,heartbeatTimer=null;
 const el=id=>document.getElementById(id);
+let middlePending=null;
+function middleControls(){
+  const s=snapshot;
+  const allowed=!!token&&!!s?.middleEnabled&&s.state===4&&s.known&&s.stationary&&!s.running&&
+    !s.calibOwner&&!session&&!s.maintenance?.active&&s.maintenanceResult!==1&&s.networkResult!==1&&
+    !middlePending&&Number.isInteger(s.position)&&s.position>=0&&s.floorRevision>0;
+  el('middleSave').disabled=!allowed||!s.middleCanSave;
+  el('middleReset').disabled=!allowed||!s.middleCustom;
+}
+function syncMiddle(s,pending,acknowledged){
+  el('middleSection').hidden=s.middleEnabled===false;
+  el('middleState').textContent=s.travel>0?'Точка второго этажа: '+s.middlePosition+' шагов · '+(s.middleCustom?'задана вручную':'середина хода'):'Сначала сохраните низ и верх.';
+  if(!middlePending||middlePending!==pending||!acknowledged)return;
+  let message='';
+  if(s.token!==pending.token)message='База перезапущена. Проверьте сохранённую точку.';
+  else if(s.floorRevision!==pending.revision){
+    const matches=s.middleCustom===!pending.reset&&s.middlePosition===(pending.reset?Math.floor(s.travel/2):pending.position);
+    message=matches?'Точка второго этажа сохранена.':'Калибровка изменена. Проверьте точку второго этажа.';
+  }else if(s.middleResult===3)message='Запрос отклонён: кабина двигалась или данные устарели. Повторите после остановки.';
+  else if(s.middleResult===4)message='Ошибка памяти. Прежняя точка сохранена.';
+  else if(Date.now()-pending.started>5000)message='Нет подтверждения сохранения. Проверьте точку и повторите.';
+  if(message){middlePending=null;el('middleMessage').textContent=message;}
+}
+async function saveMiddle(reset){
+  if(el(reset?'middleReset':'middleSave').disabled)return;
+  const pending={reset,position:snapshot.position,revision:snapshot.floorRevision,token,started:Date.now(),acknowledged:false};
+  middlePending=pending;middleControls();
+  try{
+    const r=await fetch('/api/middle',{method:'POST',headers:{'X-Lift-Token':pending.token},body:new URLSearchParams({action:reset?'reset':'save',position:pending.position,revision:pending.revision}),signal:AbortSignal.timeout(2000)});
+    if(!r.ok)throw Error(await r.text());
+    pending.acknowledged=true;el('middleMessage').textContent='Запрос передан. Ожидание записи в память…';
+  }catch(e){middlePending=null;el('middleMessage').textContent='Сохранение не подтверждено: '+e.message;}
+  middleControls();
+}
+el('middleSave').onclick=()=>saveMiddle(false);el('middleReset').onclick=()=>saveMiddle(true);
 const soundNames=['Нет','Запуск','Отправление','Прибытие','Начало калибровки','Калибровка сохранена','Позиция восстановлена','Ошибка','STOP','Двери открываются','Двери закрываются','Препятствие двери','Аварийная остановка','Тест'];
 let soundData=null,soundLive=false,soundDirty=false,soundRevision=0,soundBoot='',soundPending=null;
 function fillSound(s){el('soundEnabled').checked=!!s.settings.enabled;el('soundRoutine').checked=!!s.settings.routine;el('soundVolume').value=String(s.settings.volume);soundRevision=s.revision;soundBoot=s.boot;}
@@ -232,6 +271,7 @@ el('otaStart').onclick=async()=>{
   catch(e){el('otaState').textContent='Вход в OTA не подтверждён. Проверьте состояние и повторите.';}
 };
 function controls(){
+  middleControls();
   el('otaStart').disabled=!token||!snapshot?.stationary||!!snapshot?.calibOwner||session||snapshot?.networkResult===1||!!snapshot?.maintenance?.active||snapshot?.maintenanceResult===1;
   soundControls();
   const live=!!token&&!!snapshot, mine=live&&snapshot.calibOwner===owner;
@@ -268,11 +308,12 @@ async function heartbeat(){
   if(session)heartbeatTimer=setTimeout(heartbeat,150);
 }
 async function update(){
+  const middleAtStart=middlePending,middleAcknowledged=!!middlePending?.acknowledged;
   const requestAtStart=motionPending,acknowledgedAtStart=!!motionPending?.acknowledged;
   try{
     const r=await fetch('/api/status',{cache:'no-store',signal:AbortSignal.timeout(1200)});
     if(!r.ok)throw Error();const s=await r.json();if(s.age>1000)throw Error('stale');
-    token=s.token;snapshot=s;syncMotion(s,requestAtStart,acknowledgedAtStart);
+    token=s.token;snapshot=s;syncMiddle(s,middleAtStart,middleAcknowledged);syncMotion(s,requestAtStart,acknowledgedAtStart);
     if(session){
       if(s.calibGeneration!==generation||(s.calibOwner&&s.calibOwner!==owner))stopSession(false);
       else if(s.calibOwner===owner)awaitingStart=0;

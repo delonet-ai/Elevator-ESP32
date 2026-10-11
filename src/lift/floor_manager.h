@@ -30,3 +30,12 @@ long floorGetFullTravelSteps();
 
 // Позиция верхнего концевика в той же системе координат.
 long floorGetTopSwitchPosition();
+
+// Temporary three-floor step-based mode; disable when sensor positioning lands.
+struct MiddleRequest { uint32_t receivedAt, revision; int32_t position; bool reset; };
+bool floorLegacyMiddleEnabled();
+bool floorMiddleCustom();
+uint32_t floorRevision();
+bool floorCanSaveMiddle(long position);
+// 2 saved, 3 rejected/stale, 4 storage failure. Called only from the control loop.
+uint8_t floorApplyMiddle(const MiddleRequest &request, uint32_t now, bool idleKnown, long currentPosition);

@@ -5,13 +5,22 @@
 #include <Preferences.h>
 
 namespace {
+static_assert(!LEGACY_MIDDLE_ENABLED || FLOOR_COUNT == 3, "Legacy middle requires three floors");
 
 // NVS: namespace и ключи. Версия нужна, чтобы прошивка с другой
 // раскладкой данных не прочитала чужие значения как свои.
 const char *NVS_NAMESPACE = "lift";
 const char *KEY_VERSION   = "ver";
 const char *KEY_TRAVEL    = "travel";
-const uint32_t CALIB_STORAGE_VERSION = 1;
+const uint32_t CALIB_STORAGE_VERSION = 2;
+const char *KEY_CALIB = "geometry";
+struct Geometry { uint32_t version; int32_t travel, middle; }; // one atomic NVS blob
+long g_middle = 0; // zero means evenly spaced legacy floors
+uint32_t g_revision = 1;
+bool validTravel(long travel) { return travel >= MIN_TRAVEL_STEPS && travel <= CALIB_MAX_TRAVEL_STEPS; }
+bool validMiddle(long position, long travel) {
+  return position > POSITION_TOLERANCE && position < travel - POSITION_TOLERANCE;
+}
 
 Preferences g_prefs;
 
@@ -24,15 +33,16 @@ void recomputeFloorPositions() {
   for (uint8_t f = 1; f <= FLOOR_COUNT; f++) {
     g_floorPos[f] = (g_fullTravelSteps * (f - 1)) / (FLOOR_COUNT - 1);
   }
+  if (LEGACY_MIDDLE_ENABLED && g_middle) g_floorPos[2] = g_middle;
 }
 
-bool persistTravel(long steps) {
+bool persistTravel(long steps, long middle = 0) {
   if (!g_prefs.begin(NVS_NAMESPACE, false)) {
     LOG_E("[FLOOR] NVS open failed, calibration not saved");
     return false;
   }
-  bool saved = g_prefs.putUInt(KEY_VERSION, CALIB_STORAGE_VERSION) == sizeof(uint32_t) &&
-               g_prefs.putLong(KEY_TRAVEL, steps) == sizeof(int32_t);
+  const Geometry record = {CALIB_STORAGE_VERSION, (int32_t)steps, (int32_t)middle};
+  bool saved = g_prefs.putBytes(KEY_CALIB, &record, sizeof(record)) == sizeof(record);
   g_prefs.end();
   return saved;
 }
@@ -45,22 +55,32 @@ void floorInit() {
   }
 
   long stored = 0;
+  g_middle = 0;
+  ++g_revision;
   // Открываем namespace на запись: при первом запуске его ещё нет, и
   // открытие «только на чтение» валится с NOT_FOUND, засоряя лог ошибкой.
   if (g_prefs.begin(NVS_NAMESPACE, false)) {
-    uint32_t ver = g_prefs.getUInt(KEY_VERSION, 0);
-    if (ver == CALIB_STORAGE_VERSION) {
+    // Presence takes precedence over v1 keys, even if the blob is damaged.
+    // Never resurrect an obsolete calibration after clearing the new record.
+    if (g_prefs.isKey(KEY_CALIB)) {
+      Geometry record = {};
+      if (g_prefs.getBytesLength(KEY_CALIB) == sizeof(record) &&
+          g_prefs.getBytes(KEY_CALIB, &record, sizeof(record)) == sizeof(record) &&
+          record.version == CALIB_STORAGE_VERSION &&
+          ((record.travel == 0 && record.middle == 0) ||
+           (validTravel(record.travel) && (!record.middle || validMiddle(record.middle, record.travel))))) {
+        stored = record.travel;
+        g_middle = record.middle;
+      }
+    } else if (g_prefs.getUInt(KEY_VERSION, 0) == 1) {
       stored = g_prefs.getLong(KEY_TRAVEL, 0);
-    } else if (ver != 0) {
-      LOG_W("[FLOOR] NVS layout v%u != v%u, stored calibration ignored",
-            (unsigned)ver, (unsigned)CALIB_STORAGE_VERSION);
     }
     g_prefs.end();
   } else {
     LOG_E("[FLOOR] NVS unavailable, calibration will not survive reboot");
   }
 
-  if (stored >= MIN_TRAVEL_STEPS) {
+  if (validTravel(stored)) {
     g_fullTravelSteps = stored;
     g_hasCalib        = true;
     recomputeFloorPositions();
@@ -101,7 +121,9 @@ bool floorSetFullTravelSteps(long steps) {
     return floorClearCalibration();
   }
 
-  if (!persistTravel(steps)) return false;
+  if (!validTravel(steps) || !persistTravel(steps)) return false;
+  g_middle = 0;
+  ++g_revision;
   g_fullTravelSteps = steps;
   g_hasCalib        = true;
   recomputeFloorPositions();
@@ -114,6 +136,8 @@ bool floorSetFullTravelSteps(long steps) {
 
 bool floorClearCalibration() {
   if (!persistTravel(0)) return false;
+  g_middle = 0;
+  ++g_revision;
   g_fullTravelSteps = 0;
   g_hasCalib        = false;
   for (uint8_t f = 0; f <= FLOOR_COUNT; f++) {
@@ -129,4 +153,22 @@ long floorGetFullTravelSteps() {
 
 long floorGetTopSwitchPosition() {
   return g_fullTravelSteps + TOP_MARGIN_STEPS;
+}
+
+bool floorLegacyMiddleEnabled() { return LEGACY_MIDDLE_ENABLED; }
+bool floorMiddleCustom() { return LEGACY_MIDDLE_ENABLED && g_middle != 0; }
+uint32_t floorRevision() { return g_revision; }
+bool floorCanSaveMiddle(long position) {
+  return LEGACY_MIDDLE_ENABLED && floorHasValidCalibration() && validMiddle(position, g_fullTravelSteps);
+}
+uint8_t floorApplyMiddle(const MiddleRequest &request, uint32_t now, bool idleKnown, long currentPosition) {
+  if (!LEGACY_MIDDLE_ENABLED || !idleKnown || !floorHasValidCalibration() ||
+      now - request.receivedAt > 1000 || request.revision != g_revision ||
+      request.position != currentPosition || (!request.reset && !floorCanSaveMiddle(currentPosition))) return 3;
+  const long middle = request.reset ? 0 : currentPosition;
+  if (!persistTravel(g_fullTravelSteps, middle)) return 4;
+  g_middle = middle;
+  ++g_revision;
+  recomputeFloorPositions();
+  return 2;
 }

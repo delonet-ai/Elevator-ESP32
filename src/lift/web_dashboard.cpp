@@ -23,6 +23,8 @@ QueueHandle_t commandQueue = nullptr;
 bool stopPending = false;
 QueueHandle_t motionQueue = nullptr;
 uint8_t motionResult = 0; // 1 queued, 2 saved, 3 rejected, 4 storage failure.
+QueueHandle_t middleQueue = nullptr;
+uint8_t middleResult = 0;
 QueueHandle_t soundQueue = nullptr;
 uint8_t soundResult = 0;
 
@@ -64,13 +66,14 @@ bool dashboardInit(const char *accessPassword) {
   password = accessPassword;
   token = String(esp_random(), HEX) + String(esp_random(), HEX);
   journalBoot = String(esp_random(), HEX) + String(esp_random(), HEX);
+  middleQueue=xQueueCreate(1,sizeof(MiddleRequest));
   pairQueue=xQueueCreate(1,sizeof(PairRequest));
   maintenanceQueue = xQueueCreate(1,sizeof(uint32_t));
   networkQueue = xQueueCreate(1, sizeof(uint32_t));
   commandQueue = xQueueCreate(4, sizeof(WebCommand));
   motionQueue = xQueueCreate(1, sizeof(MotionRequest));
   soundQueue = xQueueCreate(1, sizeof(SoundRequest));
-  if (!pairQueue || !maintenanceQueue || !networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
+  if (!middleQueue || !pairQueue || !maintenanceQueue || !networkQueue || !commandQueue || !motionQueue || !soundQueue) return false;
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     auto *response = request->beginResponse(200, "text/html; charset=utf-8", PAGE);
@@ -80,14 +83,15 @@ bool dashboardInit(const char *accessPassword) {
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!authorize(request)) return;
     WebSnapshot s;
-    uint8_t result, settingsResult, otaResult;
+    uint8_t result, settingsResult, otaResult, floorResult;
     portENTER_CRITICAL(&snapshotMux);
     s = latest;
     result = networkResult;
     settingsResult = motionResult;
     otaResult = maintenanceResult;
+    floorResult = middleResult;
     portEXIT_CRITICAL(&snapshotMux);
-    char json[1792];
+    char json[2048];
     snprintf(json, sizeof(json),
       "{\"hostname\":\"%s\",\"maintenance\":%s,\"maintenanceResult\":%u,\"state\":%u,\"floor\":%u,\"target\":%u,\"position\":%ld,\"known\":%s,"
       "\"error\":%u,\"top\":%s,\"speed\":%u,\"peer\":%s,\"channel\":%u,"
@@ -95,6 +99,7 @@ bool dashboardInit(const char *accessPassword) {
       "\"running\":%s,\"travel\":%ld,\"freeHeap\":%lu,\"rssi\":%ld,"
       "\"remoteSeen\":%s,\"remoteOnline\":%s,\"remoteAgeMs\":%lu,\"age\":%lu,\"networkResult\":%u,\"calibOwner\":%lu,\"calibGeneration\":%lu,"
       "\"calibResult\":%u,\"calibCanStart\":%s,\"calibCanSave\":%s,"
+      "\"middleEnabled\":%s,\"middleCustom\":%s,\"middleCanSave\":%s,\"middlePosition\":%ld,\"floorRevision\":%lu,\"middleResult\":%u,"
       "\"motionRevision\":%lu,\"motionResult\":%u,\"motionStorage\":%u,"
       "\"motion\":{\"minimum\":%lu,\"maximum\":%lu,\"manual\":%lu,\"homing\":%lu,\"down\":%lu,\"acceleration\":%lu}}",
       s.hostname,s.maintenance[0]?s.maintenance:"{}",otaResult,s.state,s.floor,s.target,(long)s.position,s.known?"true":"false",s.error,
@@ -104,12 +109,41 @@ bool dashboardInit(const char *accessPassword) {
       s.remoteSeen?"true":"false",s.remoteOnline?"true":"false",(unsigned long)s.remoteAgeMs,
       (unsigned long)(millis()-s.uptime),result,(unsigned long)s.calibOwner,
       (unsigned long)s.calibGeneration,s.calibResult,s.calibCanStart?"true":"false",s.calibCanSave?"true":"false",
+      s.middleEnabled?"true":"false",s.middleCustom?"true":"false",s.middleCanSave?"true":"false",
+      (long)s.middlePosition,(unsigned long)s.floorRevision,floorResult,
       (unsigned long)s.motionRevision, settingsResult, s.motionStorage,
       (unsigned long)s.motion.minimum, (unsigned long)s.motion.maximum, (unsigned long)s.motion.manual,
       (unsigned long)s.motion.homing, (unsigned long)s.motion.down, (unsigned long)s.motion.acceleration);
     auto *response = request->beginResponse(200, "application/json", json);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+  });
+  server.on("/api/middle", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!authorize(request) || !csrfValid(request)) return;
+    MiddleRequest command = {};
+    uint32_t position;
+    if (!request->hasParam("action", true) || !readNumber(request,"revision",command.revision) ||
+        !readNumber(request,"position",position,true) || position > INT32_MAX) {
+      request->send(400,"text/plain","Invalid middle floor request"); return;
+    }
+    const String action = request->getParam("action",true)->value();
+    if (action != "save" && action != "reset") { request->send(400,"text/plain","Invalid action"); return; }
+    command.reset = action == "reset";
+    command.position = position;
+    command.receivedAt = millis();
+    portENTER_CRITICAL(&snapshotMux);
+    const bool allowed = accepting && !stopPending && latest.middleEnabled && latest.stationary &&
+      latest.state == 4 && latest.known && !latest.running && !latest.calibOwner &&
+      !latest.maintenanceActive && networkResult != 1 && maintenanceResult != 1 && middleResult != 1 &&
+      command.receivedAt-latest.uptime < 1000 && command.revision == latest.floorRevision &&
+      command.position == latest.position && (command.reset || latest.middleCanSave);
+    if (allowed) middleResult = 1;
+    portEXIT_CRITICAL(&snapshotMux);
+    if (!allowed) { request->send(409,"text/plain","Middle floor unavailable or stale"); return; }
+    if (xQueueSend(middleQueue,&command,0) != pdTRUE) {
+      dashboardMiddleResult(3); request->send(503,"text/plain","Queue busy"); return;
+    }
+    request->send(202,"text/plain","Queued");
   });
   server.on("/api/pair",HTTP_GET,[](AsyncWebServerRequest *request){
     if(!authorize(request))return;
@@ -354,3 +388,6 @@ void dashboardMaintenanceResult(uint8_t result){portENTER_CRITICAL(&snapshotMux)
 
 bool dashboardTakePairRequest(PairRequest &request){return pairQueue&&xQueueReceive(pairQueue,&request,0)==pdTRUE;}
 void dashboardPairResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);pairResult=result;portEXIT_CRITICAL(&snapshotMux);}
+
+bool dashboardTakeMiddleRequest(MiddleRequest &request){return middleQueue&&xQueueReceive(middleQueue,&request,0)==pdTRUE;}
+void dashboardMiddleResult(uint8_t result){portENTER_CRITICAL(&snapshotMux);middleResult=result;portEXIT_CRITICAL(&snapshotMux);}

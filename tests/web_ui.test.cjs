@@ -421,3 +421,28 @@ test('delayed blur from confirmation does not stop calibration after focus retur
   assert.equal(posts.some(p=>p.url==='/api/stop'),false);
   nodes.event('blur');assert.equal(posts.at(-1).url,'/api/stop');
 });
+
+const middleStatus=(extra={})=>motionStatus({known:true,running:false,position:370,travel:1000,middleEnabled:true,middleCustom:false,middleCanSave:true,middlePosition:500,floorRevision:2,middleResult:0,...extra});
+test('legacy middle captures idle position and waits for persisted revision',async()=>{
+  let status=middleStatus();const posts=[];
+  const nodes=await load(async(url,options)=>{if(options?.method==='POST')posts.push({url,options});return {ok:true,json:async()=>status};});
+  assert.equal(nodes.middleSave.disabled,false);assert.equal(nodes.middleReset.disabled,true);
+  await nodes.middleSave.onclick();assert.equal(posts[0].url,'/api/middle');
+  assert.equal(posts[0].options.body.get('position'),'370');assert.equal(posts[0].options.body.get('revision'),'2');
+  assert.equal(nodes.middleSave.disabled,true);await nodes.refresh();assert.equal(nodes.middleSave.disabled,true);
+  status=middleStatus({middleCustom:true,middlePosition:370,floorRevision:3,middleResult:2});await nodes.refresh();
+  assert.match(nodes.middleMessage.textContent,/сохранена/);assert.equal(nodes.middleReset.disabled,false);
+  await nodes.middleReset.onclick();assert.equal(posts[1].options.body.get('action'),'reset');
+});
+test('legacy middle refuses unknown moving stale or sensor mode status',async()=>{
+  let status=middleStatus();const nodes=await load(async()=>({ok:true,json:async()=>status}));
+  for(const extra of [{known:false},{running:true},{state:6},{stationary:false},{calibOwner:99},{maintenance:{active:true}},{age:2000},{middleEnabled:false},{middleCanSave:false}]){
+    status=middleStatus(extra);await nodes.refresh();assert.equal(nodes.middleSave.disabled,true,JSON.stringify(extra));
+  }
+});
+test('legacy middle storage failure and reboot never claim success',async()=>{
+  let status=middleStatus();const nodes=await load(async()=>({ok:true,json:async()=>status}));
+  await nodes.middleSave.onclick();status.middleResult=4;await nodes.refresh();assert.match(nodes.middleMessage.textContent,/Ошибка памяти/);
+  await nodes.middleSave.onclick();status={...status,token:'new',floorRevision:3,middlePosition:370,middleCustom:true};await nodes.refresh();
+  assert.match(nodes.middleMessage.textContent,/перезапущена/);
+});

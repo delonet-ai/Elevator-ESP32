@@ -42,5 +42,8 @@ static const uint32_t CALIB_LONG_PRESS_MS = 3000; // удержание кноп
 static const uint32_t SWITCH_DEBOUNCE_MS = 5;     // дребезг концевика
 static const uint32_t BUTTON_DEBOUNCE_MS = 30;    // дребезг кнопки на базе
 
-// Число этажей. Часть логики (деление хода) рассчитана на равные промежутки.
+// Текущий режим: три этажа, второй по умолчанию в середине хода.
 static const uint8_t FLOOR_COUNT = 3;
+
+// Temporary override for floor 2; sensor mode must disable this legacy path.
+static const bool LEGACY_MIDDLE_ENABLED = true;

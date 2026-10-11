@@ -150,6 +150,12 @@ void webUpdate() {
     snapshot.running = motorIsRunning();
     snapshot.position = smGetPosition();
     snapshot.travel = floorGetFullTravelSteps();
+    snapshot.middleEnabled = floorLegacyMiddleEnabled();
+    snapshot.middleCustom = floorMiddleCustom();
+    snapshot.middlePosition = floorGetPositionForFloor(2);
+    snapshot.floorRevision = floorRevision();
+    snapshot.middleCanSave = snapshot.state == STATE_IDLE && snapshot.known &&
+      snapshot.stationary && !snapshot.calibOwner && floorCanSaveMiddle(snapshot.position);
     snapshot.uptime = now;
     snapshot.freeHeap = ESP.getFreeHeap();
     snapshot.rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
@@ -162,6 +168,12 @@ void webUpdate() {
     const bool allowed=maintenanceActive()&&!pairingReady()&&stationary()&&!webCalibrationOwner()&&millis()-pairRequest.receivedAt<=2000;
     dashboardPairResult(!allowed?3:pairingStore(pairRequest.mac,pairRequest.key)?2:4);
     mbedtls_platform_zeroize(&pairRequest,sizeof(pairRequest));
+  }
+  MiddleRequest middleRequest;
+  if (dashboardTakeMiddleRequest(middleRequest)) {
+    dashboardMiddleResult(floorApplyMiddle(middleRequest, millis(),
+      !webMotionLocked() && stationary() && smGetState() == STATE_IDLE && smPositionKnown() &&
+      WiFi.status() == WL_CONNECTED, smGetPosition()));
   }
   if(maintenanceActive())return;
   uint32_t requestedAt;
